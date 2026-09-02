@@ -1,0 +1,1314 @@
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/AGENTS.md /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/AGENTS.md
+--- /tmp/pitelegram-upstream/baseline-0.42.2/AGENTS.md	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/AGENTS.md	2026-09-02 22:08:09
+@@ -2,7 +2,7 @@
+ 
+ ## 0. Meta-Protocol Principles
+ 
+-- `Mobile companion boundary`: Telegram extends a running Pi session; it is not a remote terminal, PTY supervisor, process launcher, session browser, or replacement TUI. Never emulate Pi navigation through private internals, ANSI/TTY injection, or a shadow `pi` process.
++- `Mobile companion boundary`: Telegram extends a running Pi session; it is not a remote terminal, PTY supervisor, process launcher, session browser, or replacement TUI. Never emulate Pi navigation through private internals, ANSI/TTY injection, or a shadow `pi` process. An operator-visible exception is the explicit new-thread request: when the owner creates a fresh Telegram thread and prompts in it, the leader may spawn a visible background `pi --mode rpc` instance bound to that thread (logged under `tmp/telegram/spawn-*.log`), never an invisible process.
+ - `Runtime safety`: Prefer explicit, fenced, recoverable behavior over shortcuts that can desynchronize Telegram transport, durable admission, local queue state, or Pi lifecycle state.
+ - `Pi-native extensibility`: Add capabilities through stable Pi and pi-telegram contracts. Do not fork polling, transport, menu ownership, or package-private runtime internals.
+ - `Bidirectional binding`: Treat Pi instance ↔ Telegram thread and bot ↔ client state as two-way relationships. Create, observe, repair, and reflect bindings on both surfaces.
+@@ -68,7 +68,7 @@
+ - The bridge is session-local and paired to one allowed Telegram user. Preserve `{ chatId, threadId? }` through every inbound, queue, callback, reaction, media, preview, reply, menu, voice, attachment, and direct-delivery path.
+ - Telegram transport ownership is not semantic queue ownership. Losing the exact transport lock must not erase accepted local queue work or stop valid local Pi dispatch; direct Bot API mutations fail closed until exact direct or follower authority exists.
+ - `tmp/telegram/owners.json` is the sole transport-owner authority. Cross-process read/check/write operations serialize transactionally and acquisition, refresh, release, takeover, and irreversible leader work fence the exact owner/epoch. `state.json` and `logs.jsonl` are diagnostics, never routing authority.
+-- Threaded Mode has exactly one live leader per bot profile. Followers are real operator-started Pi processes and must authenticate/register over local IPC; Telegram never spawns hidden Pi processes. A live but unreachable owner does not authorize split-brain polling.
++- Threaded Mode has exactly one live leader per bot profile. Followers are real operator-started Pi processes and must authenticate/register over local IPC; Telegram never spawns hidden Pi processes. The one explicit exception is a new-thread instance request: the owner creating a fresh thread and prompting in it authorizes the leader to spawn a visible background `pi --mode rpc` follower bound to that thread, carrying an exact `TELEGRAM_FOLLOWER_TARGET_*` binding; such instances register through the same local IPC admission and remain visible, logged, and bounded. A live but unreachable owner does not authorize split-brain polling.
+ - Local IPC is a trust boundary, not merely a private socket. Unknown, stale, mismatched-generation, or unauthorized requests must not inject prompts, callbacks, API sends, artifacts, liveness, or bindings.
+ - Protocol compatibility is independent from package version. Registration negotiates protocol version, runtime build, and canonical capabilities before target provisioning or live publication. `durable-follower-admission-v1` gates source forwarding; `queue-handoff-v1` independently gates semantic queue transfer for every participant and is advertised only with exact source/recipient journal-binding composition. `follower.register` is the sole bootstrap request; other requests require exact live-registry generation authority, and `bus.ack` is response-only.
+ - Long-lived timers, pollers, watchers, receivers, heartbeats, background delivery, and deferred dispatch are session-bound. Replacement stops stale activity and makes late work inert; same-process handoff may preserve exact profile/target identity but never stale Pi context or cross-profile authority. Aborting a durable update generation does not release that `update_id`: replacement replay waits for its actual handler settlement, and effectful handlers use the shared execution fence immediately before commit and after awaited delegation. Internal clones explicitly carry the hidden fence; reroute forwarding, thread-store mutation, cleanup, and Bot API boundaries retain the originating generation.
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/CHANGELOG.md /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/CHANGELOG.md
+--- /tmp/pitelegram-upstream/baseline-0.42.2/CHANGELOG.md	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/CHANGELOG.md	2026-09-03 00:50:12
+@@ -2,6 +2,18 @@
+ 
+ > Each release keeps at most 8 outcome records of at most 512 characters.
+ 
++## 0.42.3-pre: New-Thread Instances And Delivery Hardening
++
++- `Probe Resilience`: Bounds the follower-registration connected-announcement visibility probe with a 5 s best-effort deadline (`TELEGRAM_BUS_FOLLOWER_PROBE_TIMEOUT_MS` / `followerProbeTimeoutMs`), so a stalled proxy/socket no longer consumes the whole provisioning budget or fails a new-thread instance; only a definitive deleted-thread 400 still marks the target stale.
++- `Provision Self-Healing`: Bounds target-less topic provisioning with a TTL (`PI_TELEGRAM_PENDING_PROVISION_TTL_MS`, default 120 s); the provisioner drops stale pending records (expired or superseded-leader) instead of permanently failing `/telegram-connect`, and the reconciler actively removes expired target-less provisions, so a dead provisioning pass can no longer block re-provisioning forever.
++- `New-Thread Instances`: When the owner creates a fresh Telegram thread and prompts in it, the leader spawns a visible background `pi --mode rpc` follower bound to that exact thread via `TELEGRAM_FOLLOWER_TARGET_*`, de-duplicated per thread, bounded to four concurrent instances, and logged under `tmp/telegram/spawn-*.log`.
++- `Pinned Working Views`: `sendTelegramView` and activity `send` accept `pin: true` to pin the first delivered message (with notifications disabled), unpinning automatically before deletion, wired through direct, bus-follower, and aggregate transport.
++- `Robust Reasoning HTML`: Balances activity thinking HTML before Telegram delivery so cross-nested model markdown such as `**a *b** c*` no longer causes HTTP 400 parse failures.
++- `Throttle-Safe Working Ticker`: Background working-card animation edits at two-second intervals with failure backoff and auto-stop to avoid Telegram rate limiting.
++- `Ambiguous-Provision Safety`: Never treats an `ambiguous` (lost-response) topic provision as stale for TTL or leader-epoch purposes — it must keep blocking re-provisioning or a successor could create a duplicate forum topic; the provisioner and reconciler now match the store's always-live invariant for ambiguous intents.
++- `Spawner Lifecycle Hygiene`: Background-instance tracking now releases exited children from concurrency accounting (so the 4-instance cap applies to live instances, not total ever spawned), keeps a per-thread respawn cooldown against crash loops, guards stale child exits from deleting a replacement, and unrefs bookkeeping timers without unrefing awaited deadlines.
++- `Hard-Deadline Delivery`: The Telegram API transport cap and follower-provisioning timeout are no longer unref'd, so a stalled proxy/socket is actually bounded even when the process is otherwise idle instead of silently skipping the deadline and hanging the caller forever.
++
+ ## 0.42.2: Telegram Comment Membrane
+ 
+ - `Transport-Private HTML Comments`: Removes every assistant-authored `<!-- … -->` block from Telegram previews, active-turn finals, connected companion projections, direct sends, and Guest Mode regardless of Markdown position or owning extension; only recognized top-level comments activate actions, unclosed tails stay hidden, comment-only text plans send nothing, and the Pi terminal transcript remains unchanged.
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/docs/multi-instance-bus.md /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/docs/multi-instance-bus.md
+--- /tmp/pitelegram-upstream/baseline-0.42.2/docs/multi-instance-bus.md	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/docs/multi-instance-bus.md	2026-09-02 22:09:20
+@@ -234,10 +234,10 @@
+ In Telegram private-chat Threaded Mode:
+ 
+ - The private bot chat is a tabbed instance workspace, not a classic `General + threads` forum.
+-- `All` is an aggregate view, not a process launcher. Explicit new instances use live Pi follower registration: the operator starts Pi in a terminal and runs `/telegram-connect`; owner-created empty threads are observed but not treated as a Pi instance until the user chooses a route or restore action.
++- `All` is an aggregate view, not a process launcher. Explicit new instances normally use live Pi follower registration: the operator starts Pi in a terminal and runs `/telegram-connect`. The one operator-visible shortcut is a fresh owner-created thread: when the owner prompts in a brand-new thread, the leader spawns a visible background `pi --mode rpc` follower bound to that exact thread (see `New-Thread Instances`), de-duplicated per thread and bounded. Owner-created empty threads with no prompt are still only observed, not treated as a Pi instance.
+ - The leader proactively creates or reclaims its own thread on startup/activation when Threaded Mode is available, so the visible leader has the same two-way binding as followers.
+ - **Unbound thread detection**: when the owner writes in an unknown `message_thread_id`, the bridge checks effective Threaded Mode state. If the current leader has no active bound thread, that new thread is reclaimed for the leader and the prompt is served locally. Otherwise the bridge preserves prompts and commands in that Telegram thread and shows the complete forward plus replace/restore chooser. Successful forward deletes the chooser and confirmed temporary source through `thread-reconciler`; successful restore always deletes the chooser, rebinds the source, and deletes only the selected instance's replaced old thread. Partial foreign batch delivery retries only remaining messages; incomplete thread or chooser deletion retains a cleanup-only retry control without redispatching routed content or leaving an expired visible button.
+-- Unknown later threads and threadless prompt messages are not silently routed to the leader and never launch hidden Pi processes. The default and only operator path for a new visible instance is starting a visible second Pi process and letting it register as follower through `/telegram-connect`. A manual follower with the same stable binding identity reclaims its current persisted thread across process restart; only an authenticated live registration becomes routing authority. Explicit stale/deleted observations invalidate that restoration hint before a fresh thread is provisioned.
++- Unknown later threads and threadless prompt messages are not silently routed to the leader and never launch hidden Pi processes. The default operator path for a new visible instance is starting a visible second Pi process and letting it register as follower through `/telegram-connect`; a fresh owner prompt in an unknown thread is the explicit alternative that authorizes the leader to spawn a visible background follower bound to that thread. A manual follower with the same stable binding identity reclaims its current persisted thread across process restart; only an authenticated live registration becomes routing authority. Explicit stale/deleted observations invalidate that restoration hint before a fresh thread is provisioned.
+ - Thread lifecycle service messages (`forum_topic_created`, `forum_topic_closed`, `forum_topic_reopened`, deletion/stale send errors) update observations and binding state. Closed/deleted leader or follower threads can be reclaimed or recreated deliberately. Leader startup also probes reused own threads with a non-visible chat action; if Telegram reports the thread closed/deleted, the binding is marked stale and a fresh leader thread is created. Unknown `forum_topic_created` service events are observation-only and are not destructive cleanup proof.
+ - Bidirectional binding is a core UX requirement, not an implementation detail: Pi instances actively advertise/remember their thread identity, while the bot observes Telegram-client thread state and reflects it back into instance state. This keeps the system responsive, recognizable, and controllable even when the operator closes tabs, writes from `All`, or a follower later becomes leader.
+ 
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/index.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/index.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/index.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/index.ts	2026-09-03 00:50:00
+@@ -16,6 +16,7 @@
+ import * as Config from "./lib/config.ts";
+ import * as Delivery from "./lib/delivery.ts";
+ import * as Inbound from "./lib/inbound.ts";
++import * as InstanceSpawner from "./lib/instance-spawner.ts";
+ import * as Journal from "./lib/journal.ts";
+ import * as Lifecycle from "./lib/lifecycle.ts";
+ import * as Locks from "./lib/locks.ts";
+@@ -762,6 +763,12 @@
+       getFollowerTarget: telegramBusFollowerRegistrationState.getTarget,
+       getCurrentIdentity: getCurrentInstanceThreadIdentity,
+     });
++  const instanceSpawner = InstanceSpawner.createTelegramInstanceSpawner({
++    getCwd() {
++      return process.cwd();
++    },
++    recordRuntimeEvent,
++  });
+   const inboundRouteRuntime = Routing.createTelegramInboundRouteRuntime({
+     configStore,
+     callApi: callTelegramApi,
+@@ -782,6 +789,7 @@
+       return observedThreadTargetBinding.handle(ctx);
+     },
+     foreignOwnedUpdateForwarder,
++    instanceSpawner,
+     replaceFollowerThreadTarget: restoreFollowerThreadTarget,
+     bridgeRuntime,
+     activeTurnRuntime,
+@@ -1111,8 +1119,8 @@
+       shouldForceFreshUnnamed:
+         telegramThreadCapabilityState.shouldForceFreshLeaderThread,
+       topicTargetStore: threadStore,
+-      callApi(method, body) {
+-        return directTelegramApiRuntime.call(method, body);
++      callApi(method, body, options) {
++        return directTelegramApiRuntime.call(method, body, options);
+       },
+       callMultipart: directTelegramApiRuntime.callMultipart,
+       downloadFile: directTelegramApiRuntime.downloadFile,
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/activity-verbosity.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/activity-verbosity.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/activity-verbosity.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/activity-verbosity.ts	2026-09-02 22:03:26
+@@ -6,6 +6,7 @@
+ 
+ import type { TelegramActivityEvent } from "./activity.ts";
+ import {
++  balanceTelegramHtml,
+   escapeHtml,
+   renderTelegramInlineMarkdownHtml,
+ } from "./rendering.ts";
+@@ -284,7 +285,9 @@
+ }
+ 
+ export function renderTelegramThinkingActivityHtml(text: string): string {
+-  return `<blockquote expandable>${renderThinkingActivityEvidenceHtml(text)}</blockquote>`;
++  return `<blockquote expandable>${balanceTelegramHtml(
++    renderThinkingActivityEvidenceHtml(text),
++  )}</blockquote>`;
+ }
+ 
+ export interface TelegramActivityVerbosityRuntime {
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/activity.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/activity.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/activity.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/activity.ts	2026-09-02 21:40:11
+@@ -110,6 +110,7 @@
+     options?: {
+       scope?: TelegramDeliveryScope;
+       replyToMessageId?: number;
++      pin?: boolean;
+     },
+   ) => Promise<TelegramDeliveryResult<TelegramDeliveryHandle>>;
+   edit: (
+@@ -228,6 +229,7 @@
+       return sendTelegramView(view, {
+         scope: options?.scope ?? defaultScope,
+         replyToMessageId: options?.replyToMessageId,
++        pin: options?.pin,
+       });
+     },
+     edit(handle, view) {
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/bus-api.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/bus-api.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/bus-api.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/bus-api.ts	2026-09-02 21:44:10
+@@ -372,6 +372,54 @@
+         },
+       ]);
+     },
++    pinChatMessage(
++      chatId: number,
++      messageId: number,
++      options?: {
++        message_thread_id?: number;
++        disable_notification?: boolean;
++      },
++    ): Promise<boolean> {
++      const body = withDefaultThreadTarget(
++        {
++          chat_id: chatId,
++          message_id: messageId,
++          ...(options?.message_thread_id !== undefined
++            ? { message_thread_id: options.message_thread_id }
++            : {}),
++          ...(options?.disable_notification !== undefined
++            ? { disable_notification: options.disable_notification }
++            : {}),
++        },
++        deps.getDefaultTarget?.(),
++      );
++      return deps.ownsDirect()
++        ? deps.directRuntime.pinChatMessage(chatId, messageId, options)
++        : deps
++            .callFollowerApi("call", ["pinChatMessage", body])
++            .then(asBoolean);
++    },
++    unpinChatMessage(
++      chatId: number,
++      messageId: number,
++      options?: { message_thread_id?: number },
++    ): Promise<boolean> {
++      const body = withDefaultThreadTarget(
++        {
++          chat_id: chatId,
++          message_id: messageId,
++          ...(options?.message_thread_id !== undefined
++            ? { message_thread_id: options.message_thread_id }
++            : {}),
++        },
++        deps.getDefaultTarget?.(),
++      );
++      return deps.ownsDirect()
++        ? deps.directRuntime.unpinChatMessage(chatId, messageId, options)
++        : deps
++            .callFollowerApi("call", ["unpinChatMessage", body])
++            .then(asBoolean);
++    },
+     prepareTempDir(): Promise<number> {
+       return deps.directRuntime.prepareTempDir();
+     },
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/bus-follower.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/bus-follower.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/bus-follower.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/bus-follower.ts	2026-09-02 22:05:04
+@@ -54,6 +54,29 @@
+ export const TELEGRAM_BUS_FOLLOWER_REGISTRATION_RETRY_DELAY_MS =
+   TELEGRAM_BUS_REGISTRATION_RETRY.delayMs;
+ 
++/**
++ * Environment-injected follower target used by spawned background Pi instances
++ * (`TELEGRAM_FOLLOWER_TARGET_CHAT_ID` / `TELEGRAM_FOLLOWER_TARGET_THREAD_ID`).
++ * Lets a leader spawn a headless follower that binds a specific Telegram thread.
++ */
++const TELEGRAM_FOLLOWER_TARGET_CHAT_ID_ENV = "TELEGRAM_FOLLOWER_TARGET_CHAT_ID";
++const TELEGRAM_FOLLOWER_TARGET_THREAD_ID_ENV =
++  "TELEGRAM_FOLLOWER_TARGET_THREAD_ID";
++
++export function getTelegramFollowerEnvironmentTarget(
++  env: NodeJS.ProcessEnv = process.env,
++): TelegramTarget | undefined {
++  const chatIdRaw = env[TELEGRAM_FOLLOWER_TARGET_CHAT_ID_ENV]?.trim();
++  const threadIdRaw = env[TELEGRAM_FOLLOWER_TARGET_THREAD_ID_ENV]?.trim();
++  if (!chatIdRaw || !threadIdRaw) return undefined;
++  const chatId = Number(chatIdRaw);
++  const threadId = Number(threadIdRaw);
++  if (!Number.isSafeInteger(chatId) || !Number.isSafeInteger(threadId)) {
++    return undefined;
++  }
++  return { chatId, threadId };
++}
++
+ const TELEGRAM_FOLLOWER_SESSION_HANDOFF_KEY =
+   "__piTelegramFollowerSessionHandoff";
+ 
+@@ -1627,7 +1650,8 @@
+           target:
+             registrationOptions?.target ??
+             deps.registrationState?.getTarget() ??
+-            lastKnownTarget,
++            lastKnownTarget ??
++            getTelegramFollowerEnvironmentTarget(),
+           busSocketPath:
+             deps.getFollowerBusSocketPath?.() ?? deps.followerBusSocketPath,
+           registrationGeneration,
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/bus-leader.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/bus-leader.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/bus-leader.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/bus-leader.ts	2026-09-03 00:50:00
+@@ -88,6 +88,7 @@
+   callApi: <TResponse>(
+     method: string,
+     body: Record<string, unknown>,
++    options?: { signal?: AbortSignal },
+   ) => Promise<TResponse>;
+   getCurrentLeaderEpoch?: () => number | string | undefined;
+   getThreadReconciliationMachineState?: () =>
+@@ -118,6 +119,7 @@
+   callApi: <TResponse>(
+     method: string,
+     body: Record<string, unknown>,
++    options?: { signal?: AbortSignal },
+   ) => Promise<TResponse>;
+   getCurrentLeaderEpoch?: () => number | string | undefined;
+   getSyncState: () => Sync.TelegramSyncState;
+@@ -125,6 +127,7 @@
+   onProvisioningStart?: () => void;
+   onProvisioningEnd?: () => void;
+   getNowMs?: () => number;
++  followerProbeTimeoutMs?: number;
+   recordRuntimeEvent: (
+     category: string,
+     error: unknown,
+@@ -342,6 +345,52 @@
+ 
+ const TELEGRAM_BUS_SLOW_FOLLOWER_REGISTRATION_MS = 1000;
+ 
++/**
++ * Bounded deadline for a single follower-register provisioning pass. A follower
++ * registration must never hold the bus handler open forever (a stalled Telegram
++ * API call such as createForumTopic used to hang the handler, leaving the
++ * follower in an eternal blind register/retry loop that also re-announced
++ * "Instance … connected.").
++ */
++const TELEGRAM_BUS_FOLLOWER_PROVISION_TIMEOUT_MS = 15_000;
++
++/**
++ * Best-effort deadline for a single follower-registration visibility probe
++ * (the connected-announcement send). A stalled proxy/socket must never consume
++ * the whole provisioning budget or fail registration: the probe is only a
++ * liveness hint, and a timeout means "unknown, assume visible", not "deleted".
++ * Only a definitive deleted-thread HTTP 400 still marks the target stale.
++ */
++const TELEGRAM_BUS_FOLLOWER_PROBE_TIMEOUT_MS = 5_000;
++
++function withTelegramBusFollowerProvisionTimeout<T>(
++  promise: Promise<T> | T,
++  timeoutMs: number,
++): Promise<T> {
++  return new Promise<T>((resolve, reject) => {
++    // Not unref'd: the caller awaits this promise, so the deadline must fire
++    // even when the event loop is otherwise idle (an unref'd timer is skipped
++    // once the loop drains, re-opening the exact hang this bounds).
++    const timer = setTimeout(() => {
++      reject(
++        new Error(
++          `Telegram follower registration provisioning timed out after ${timeoutMs}ms.`,
++        ),
++      );
++    }, timeoutMs);
++    Promise.resolve(promise).then(
++      (value) => {
++        clearTimeout(timer);
++        resolve(value);
++      },
++      (error) => {
++        clearTimeout(timer);
++        reject(error);
++      },
++    );
++  });
++}
++
+ function scheduleTelegramBusLeaderBackgroundTask(
+   task: () => Promise<void>,
+   onError: (error: unknown) => void,
+@@ -582,6 +631,13 @@
+             })
+           : undefined;
+       if (requiresVisibilityProbe && connectedAnnouncement) {
++        // The visibility probe (connected announcement) is best-effort: a
++        // stalled proxy/socket must not consume the whole provisioning budget
++        // or fail registration. Only a definitive deleted-thread 400 marks the
++        // target stale; a probe timeout means "unknown, assume visible".
++        const probeSignal = AbortSignal.timeout(
++          deps.followerProbeTimeoutMs ?? TELEGRAM_BUS_FOLLOWER_PROBE_TIMEOUT_MS,
++        );
+         try {
+           await deps.callApi(
+             exactSessionHandoff ? "sendChatAction" : "sendMessage",
+@@ -597,6 +653,7 @@
+                   text: connectedAnnouncement.text,
+                   parse_mode: connectedAnnouncement.parseMode,
+                 },
++            { signal: probeSignal },
+           );
+           if (recoverableTarget || probeRequiredRecord) {
+             const activatedRecord = deps.topicTargetStore.upsert({
+@@ -653,6 +710,14 @@
+                 slot: result.record.slot,
+                 state: "connected",
+               });
++          } else if (probeSignal.aborted) {
++            deps.recordRuntimeEvent("telegram", error, {
++              phase: "follower-topic-reuse-probe-timeout",
++              instanceId: registration.instanceId,
++              chatId: result.target.chatId,
++              threadId: result.target.threadId,
++            });
++            // Best-effort: registration proceeds with the recovered target.
+           } else {
+             deps.recordRuntimeEvent("telegram", error, {
+               phase: "follower-topic-reuse-probe",
+@@ -1091,6 +1156,7 @@
+   protocolIdentity: TelegramBusProtocolIdentity;
+   getNowMs?: () => number;
+   timeoutMs?: number;
++  followerProvisionTimeoutMs?: number;
+   callApi?: (method: string, args: unknown[]) => Promise<unknown> | unknown;
+   authorizeFollowerApiCall?: (input: {
+     follower: TelegramBusFollowerView;
+@@ -1442,9 +1508,13 @@
+                 "Telegram follower registration requires leader ownership.",
+               );
+             }
+-            const target = await deps.provisionFollowerTarget?.(
+-              envelope.registration,
+-            );
++            const target = await (deps.provisionFollowerTarget
++              ? withTelegramBusFollowerProvisionTimeout(
++                  deps.provisionFollowerTarget(envelope.registration),
++                  deps.followerProvisionTimeoutMs ??
++                    TELEGRAM_BUS_FOLLOWER_PROVISION_TIMEOUT_MS,
++                )
++              : undefined);
+             if (
+               deps.getCurrentLeaderEpoch &&
+               deps.getCurrentLeaderEpoch() !== leaderEpoch
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/delivery.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/delivery.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/delivery.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/delivery.ts	2026-09-03 00:50:00
+@@ -51,6 +51,8 @@
+   readonly target: TelegramDeliveryTarget;
+   readonly messageIds: readonly number[];
+   readonly generation: string;
++  /** True when the first message was pinned to the top of the chat on send. */
++  readonly pinned?: boolean;
+ }
+ 
+ export type TelegramDeliveryFailureReason =
+@@ -75,6 +77,8 @@
+ export interface SendTelegramViewOptions {
+   scope: TelegramDeliveryScope;
+   replyToMessageId?: number;
++  /** Pin the first sent message to the top of the chat; deleted views unpin automatically. */
++  pin?: boolean;
+ }
+ 
+ export type TelegramDeliveryChatAction =
+@@ -142,12 +146,21 @@
+     target: TelegramDeliveryTarget,
+     messageId: number,
+   ) => Promise<void>;
++  pinMessage?: (
++    target: TelegramDeliveryTarget,
++    messageId: number,
++    disableNotification?: boolean,
++  ) => Promise<unknown>;
++  unpinMessage?: (
++    target: TelegramDeliveryTarget,
++    messageId: number,
++  ) => Promise<unknown>;
+   sendChatAction: (
+     target: TelegramDeliveryTarget,
+     action: TelegramDeliveryChatAction,
+   ) => Promise<void>;
+   recordFailure?: (
+-    operation: "send" | "edit" | "delete" | "chat-action",
++    operation: "send" | "edit" | "delete" | "chat-action" | "pin",
+     error: unknown,
+     target?: TelegramDeliveryTarget,
+   ) => void;
+@@ -161,7 +174,12 @@
+   isTransportActive?: () => boolean;
+   api: Pick<
+     TelegramBridgeApiRuntime,
+-    "sendMessage" | "editMessageText" | "deleteMessage" | "sendChatAction"
++    | "sendMessage"
++    | "editMessageText"
++    | "deleteMessage"
++    | "sendChatAction"
++    | "pinChatMessage"
++    | "unpinChatMessage"
+   >;
+   recordOwnership: (input: {
+     chatId: number;
+@@ -443,7 +461,11 @@
+   let active = true;
+   const handleBindings = new WeakMap<
+     TelegramDeliveryHandle,
+-    { target: TelegramDeliveryTarget; messageIds: readonly number[] }
++    {
++      target: TelegramDeliveryTarget;
++      messageIds: readonly number[];
++      pinned: boolean;
++    }
+   >();
+   const runForTarget = createTelegramDeliveryTargetQueue();
+   const render = (
+@@ -470,7 +492,7 @@
+       "Telegram delivery runtime generation is inactive.",
+     );
+   const transportFailure = <T>(
+-    operation: "send" | "edit" | "delete" | "chat-action",
++    operation: "send" | "edit" | "delete" | "chat-action" | "pin",
+     error: unknown,
+     target?: TelegramDeliveryTarget,
+     partial?: T,
+@@ -492,6 +514,7 @@
+   const createHandle = (
+     target: TelegramDeliveryTarget,
+     messageIds: readonly number[],
++    pinned = false,
+   ): TelegramDeliveryHandle => {
+     const canonicalTarget = Object.freeze(cloneTarget(target));
+     const canonicalMessageIds = Object.freeze([...messageIds]);
+@@ -499,10 +522,12 @@
+       target: canonicalTarget,
+       messageIds: canonicalMessageIds,
+       generation: deps.generation,
++      ...(pinned ? { pinned: true } : {}),
+     });
+     handleBindings.set(handle, {
+       target: canonicalTarget,
+       messageIds: canonicalMessageIds,
++      pinned,
+     });
+     return handle;
+   };
+@@ -511,6 +536,7 @@
+   ): TelegramDeliveryResult<{
+     target: TelegramDeliveryTarget;
+     messageIds: readonly number[];
++    pinned: boolean;
+   }> => {
+     if (!active) return inactive();
+     const binding = handleBindings.get(handle);
+@@ -544,6 +570,7 @@
+       return runForTarget(target, async () => {
+         if (!active) return inactive();
+         const messageIds: number[] = [];
++        let pinned = false;
+         try {
+           for (const [index, chunk] of rendered.value.entries()) {
+             if (!active) return inactive();
+@@ -560,7 +587,16 @@
+             messageIds.push(messageId);
+             if (!active) return inactive();
+           }
+-          return { ok: true, value: createHandle(target, messageIds) };
++          if (options.pin && messageIds.length > 0 && deps.pinMessage) {
++            try {
++              await deps.pinMessage(target, messageIds[0]!, true);
++              pinned = true;
++            } catch (error) {
++              deps.recordFailure?.("pin", error, target);
++            }
++            if (!active) return inactive();
++          }
++          return { ok: true, value: createHandle(target, messageIds, pinned) };
+         } catch (error) {
+           return active
+             ? transportFailure(
+@@ -631,7 +667,11 @@
+           }
+           return {
+             ok: true,
+-            value: createHandle(target, visibleMessageIds),
++            value: createHandle(
++              target,
++              visibleMessageIds,
++              resolved.value.pinned,
++            ),
+           };
+         } catch (error) {
+           return active
+@@ -652,6 +692,14 @@
+       return runForTarget(target, async () => {
+         if (!active) return inactive();
+         try {
++          if (resolved.value.pinned && deps.unpinMessage) {
++            try {
++              await deps.unpinMessage(target, resolved.value.messageIds[0]!);
++            } catch {
++              // Deleting a pinned message also clears its pin; keep going.
++            }
++            if (!active) return inactive();
++          }
+           for (const messageId of resolved.value.messageIds) {
+             if (!active) return inactive();
+             await deps.deleteMessage(target, messageId);
+@@ -766,6 +814,23 @@
+     deleteMessage(target, messageId) {
+       assertTransportActive();
+       return deps.api.deleteMessage(target.chatId, messageId);
++    },
++    pinMessage(target, messageId, disableNotification) {
++      assertTransportActive();
++      return deps.api.pinChatMessage(target.chatId, messageId, {
++        ...(target.threadId === undefined
++          ? {}
++          : { message_thread_id: target.threadId }),
++        ...(disableNotification ? { disable_notification: true } : {}),
++      });
++    },
++    unpinMessage(target, messageId) {
++      assertTransportActive();
++      return deps.api.unpinChatMessage(target.chatId, messageId, {
++        ...(target.threadId === undefined
++          ? {}
++          : { message_thread_id: target.threadId }),
++      });
+     },
+     async sendChatAction(target, action) {
+       assertTransportActive();
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/instance-spawner.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/instance-spawner.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/instance-spawner.ts	1970-01-01 08:00:00
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/instance-spawner.ts	2026-09-03 00:50:00
+@@ -0,0 +1,288 @@
++/**
++ * Background Pi instance spawner for operator-visible Telegram threads
++ * Zones: telegram multi-instance bus, process lifecycle, operator delivery
++ * Owns spawning headless `pi --mode rpc` follower processes that bind a specific
++ * Telegram thread, their liveness/status tracking, de-duplication, bounded
++ * concurrency, and log capture. Excludes polling, routing, queue, and bus wiring.
++ */
++
++import { spawn, type ChildProcess } from "node:child_process";
++import { appendFile, mkdir } from "node:fs/promises";
++import { join } from "node:path";
++import { resolveTelegramTempDir } from "./paths.ts";
++
++const TELEGRAM_SPAWN_READY_GRACE_MS = 3_000;
++const TELEGRAM_SPAWN_RPC_COMMAND_TIMEOUT_MS = 15_000;
++const TELEGRAM_SPAWN_MAX_INSTANCES = 4;
++/**
++ * After a background instance exits, its thread stays "spawned" for this long
++ * so a crash loop cannot immediately re-arm the spawner on the next prompt.
++ * Live instances never count against concurrency once they exit: the map only
++ * holds starting/running children, so the limit applies to concurrent live
++ * instances, not to the total ever spawned.
++ */
++const TELEGRAM_SPAWN_EXIT_COOLDOWN_MS = 30_000;
++
++export interface TelegramBackgroundInstance {
++  pid: number;
++  chatId: number;
++  threadId: number;
++  threadName?: string;
++  startedAtMs: number;
++  status: "starting" | "running" | "exited";
++  exitedAtMs?: number;
++  exitCode?: number | null;
++}
++
++export interface TelegramInstanceSpawnerDeps {
++  /** Executable used to launch Pi (`pi` resolves via PATH). */
++  piCommand?: string;
++  /** Working directory for spawned instances (default: leader cwd). */
++  getCwd?: () => string | undefined;
++  /** Maximum concurrent background instances (default 4). */
++  maxInstances?: number;
++  /** Log directory (default: <agentDir>/tmp/telegram). */
++  getLogDir?: () => string;
++  /** Injectable clock for deterministic tests (default: Date.now). */
++  getNowMs?: () => number;
++  recordRuntimeEvent?: (
++    category: string,
++    error: unknown,
++    details?: Record<string, unknown>,
++  ) => void;
++}
++
++export interface TelegramInstanceSpawner {
++  isSpawned: (chatId: number, threadId: number) => boolean;
++  list: () => readonly TelegramBackgroundInstance[];
++  spawnForThread: (input: {
++    chatId: number;
++    threadId: number;
++    threadName?: string;
++  }) => Promise<{ ok: boolean; message?: string }>;
++  /** Detach tracking on session shutdown; leaves spawned processes running. */
++  stop: () => void;
++}
++
++function targetKey(chatId: number, threadId: number): string {
++  return `${chatId}:${threadId}`;
++}
++
++export function createTelegramInstanceSpawner(
++  deps: TelegramInstanceSpawnerDeps = {},
++): TelegramInstanceSpawner {
++  // Only starting/running children live here; exited instances move to
++  // recentExits (timestamped) so concurrency accounting stays live-only while
++  // a short exit cooldown still prevents tight respawn loops per thread.
++  const instances = new Map<string, TelegramBackgroundInstance>();
++  const recentExits = new Map<string, { record: TelegramBackgroundInstance; exitedAtMs: number }>();
++  const children = new Map<string, ChildProcess>();
++  const maxInstances = deps.maxInstances ?? TELEGRAM_SPAWN_MAX_INSTANCES;
++  const exitCooldownMs = TELEGRAM_SPAWN_EXIT_COOLDOWN_MS;
++  const getNowMs = deps.getNowMs ?? Date.now;
++  let stopped = false;
++
++  const isInExitCooldown = (key: string, nowMs: number): boolean => {
++    const exit = recentExits.get(key);
++    if (!exit) return false;
++    if (nowMs - exit.exitedAtMs >= exitCooldownMs) {
++      recentExits.delete(key);
++      return false;
++    }
++    return true;
++  };
++
++  const captureLog = (
++    chatId: number,
++    threadId: number,
++    label: string,
++    chunk: Buffer | string,
++  ): void => {
++    if (!deps.recordRuntimeEvent) return;
++    const line = String(chunk)
++      .split("\n")
++      .filter((part) => part.trim().length > 0)
++      .slice(-20)
++      .join(" | ");
++    if (!line) return;
++    deps.recordRuntimeEvent(
++      "spawn",
++      new Error(`${label}: ${line.slice(0, 800)}`),
++      { phase: "instance-log", chatId, threadId },
++    );
++  };
++
++  const writeLogFile = async (
++    chatId: number,
++    threadId: number,
++    label: string,
++    chunk: Buffer | string,
++  ): Promise<void> => {
++    try {
++      const logDir =
++        deps.getLogDir?.() ?? resolveTelegramTempDir();
++      await mkdir(logDir, { recursive: true });
++      await appendFile(
++        join(logDir, `spawn-${chatId}-${threadId}.log`),
++        `[${label}] ${String(chunk)}`,
++      );
++    } catch {
++      // Log capture must never break spawning.
++    }
++  };
++
++  const injectConnectCommand = (child: ChildProcess): void => {
++    const command = JSON.stringify({
++      id: "spawner-telegram-connect",
++      type: "prompt",
++      message: "/telegram-connect",
++    });
++    if (!child.stdin?.writable) return;
++    try {
++      child.stdin.write(`${command}\n`);
++    } catch {
++      // Child may have exited already; exit handler cleans up.
++    }
++  };
++
++  return {
++    isSpawned(chatId, threadId) {
++      const key = targetKey(chatId, threadId);
++      if (instances.has(key)) return true;
++      return isInExitCooldown(key, getNowMs());
++    },
++    list() {
++      const nowMs = getNowMs();
++      return [
++        ...instances.values(),
++        ...[...recentExits.values()]
++          .filter(({ exitedAtMs }) => nowMs - exitedAtMs < exitCooldownMs)
++          .map(({ record }) => record),
++      ];
++    },
++    async spawnForThread({ chatId, threadId, threadName }) {
++      if (stopped) return { ok: false, message: "Spawner is stopped." };
++      const key = targetKey(chatId, threadId);
++      const nowMs = getNowMs();
++      const existing = instances.get(key);
++      if (existing) {
++        return { ok: false, message: "An instance for this thread already started." };
++      }
++      if (isInExitCooldown(key, nowMs)) {
++        return {
++          ok: false,
++          message:
++            "An instance for this thread exited recently; waiting out the respawn cooldown.",
++        };
++      }
++      if (instances.size >= maxInstances) {
++        return { ok: false, message: `Background instance limit (${maxInstances}) reached.` };
++      }
++      const startedAtMs = getNowMs();
++      const instance: TelegramBackgroundInstance = {
++        pid: 0,
++        chatId,
++        threadId,
++        ...(threadName ? { threadName } : {}),
++        startedAtMs,
++        status: "starting",
++      };
++      const cwd = deps.getCwd?.() ?? process.cwd();
++      const child = spawn(
++        deps.piCommand ?? "pi",
++        [
++          "--mode",
++          "rpc",
++          ...(threadName ? ["--name", threadName] : []),
++        ],
++        {
++          cwd,
++          env: {
++            ...process.env,
++            TELEGRAM_FOLLOWER_TARGET_CHAT_ID: String(chatId),
++            TELEGRAM_FOLLOWER_TARGET_THREAD_ID: String(threadId),
++          },
++          stdio: ["pipe", "pipe", "pipe"],
++        },
++      );
++      instance.pid = child.pid ?? 0;
++      instances.set(key, instance);
++      children.set(key, child);
++
++      const onExit = (code: number | null, signal: string | null): void => {
++        // A superseded child must never clean up its replacement: only act if
++        // this child is still the tracked one for its thread.
++        if (children.get(key) !== child) return;
++        const current = instances.get(key);
++        if (!current) return;
++        current.status = "exited";
++        current.exitedAtMs = getNowMs();
++        current.exitCode = code;
++        // Move out of live concurrency accounting; keep a short cooldown so the
++        // same thread cannot hot-respawn into a crash loop.
++        instances.delete(key);
++        recentExits.set(key, {
++          record: current,
++          exitedAtMs: current.exitedAtMs,
++        });
++        children.delete(key);
++        deps.recordRuntimeEvent?.(
++          "spawn",
++          new Error(
++            `Background Pi instance exited (code ${code ?? "?"}, signal ${signal ?? "none"}).`,
++          ),
++          { phase: "instance-exit", chatId, threadId, pid: current.pid },
++        );
++      };
++      child.on("exit", onExit);
++      child.on("error", (error) => {
++        deps.recordRuntimeEvent?.("spawn", error, {
++          phase: "instance-spawn-error",
++          chatId,
++          threadId,
++        });
++      });
++      child.stdout?.on("data", (chunk: Buffer) => {
++        void writeLogFile(chatId, threadId, "out", chunk);
++        captureLog(chatId, threadId, "out", chunk);
++      });
++      child.stderr?.on("data", (chunk: Buffer) => {
++        void writeLogFile(chatId, threadId, "err", chunk);
++        captureLog(chatId, threadId, "err", chunk);
++      });
++
++      // Inject /telegram-connect once the session has had time to load extensions.
++      const connectTimer = setTimeout(() => {
++        const live = children.get(key);
++        if (!live || live.exitCode !== null || !live.stdin?.writable) return;
++        instance.status = "running";
++        injectConnectCommand(live);
++        const retryTimer = setTimeout(() => {
++          const stillLive = children.get(key);
++          if (stillLive && stillLive.exitCode === null) {
++            deps.recordRuntimeEvent?.(
++              "spawn",
++              new Error(
++                "Background Pi instance did not confirm connection within the window; retrying /telegram-connect once.",
++              ),
++              { phase: "instance-connect-retry", chatId, threadId },
++            );
++            injectConnectCommand(stillLive);
++          }
++        }, TELEGRAM_SPAWN_RPC_COMMAND_TIMEOUT_MS);
++        retryTimer.unref?.();
++      }, TELEGRAM_SPAWN_READY_GRACE_MS);
++      // These timers are bookkeeping only; they must never keep the leader
++      // process (or a test runner) alive after the child is gone.
++      connectTimer.unref?.();
++
++      return { ok: true };
++    },
++    stop() {
++      stopped = true;
++      instances.clear();
++      recentExits.clear();
++      children.clear();
++    },
++  };
++}
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/rendering.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/rendering.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/rendering.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/rendering.ts	2026-09-02 22:03:01
+@@ -33,6 +33,46 @@
+   return escapeHtml(text).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+ }
+ 
++/**
++ * Balance Telegram-safe HTML: escape closing tags that do not match the
++ * innermost open tag and auto-close any tags left open. Model reasoning text
++ * often contains cross-nested markdown (e.g. `**a *b** c*`) whose rendered
++ * HTML would otherwise be rejected by Telegram with a 400 parse error.
++ */
++export function balanceTelegramHtml(html: string): string {
++  const openTags: OpenHtmlTag[] = [];
++  const tagOrTextPattern = /<\/?[a-zA-Z][^>]*>|[^<]+/g;
++  let result = "";
++  for (const match of html.matchAll(tagOrTextPattern)) {
++    const token = match[0];
++    if (!token.startsWith("<")) {
++      result += token;
++      continue;
++    }
++    const name = getHtmlTagName(token);
++    if (!name || TELEGRAM_VOID_HTML_TAGS.has(name)) {
++      result += token;
++      continue;
++    }
++    if (isHtmlClosingTag(token)) {
++      if (openTags.length > 0 && openTags[openTags.length - 1]!.name === name) {
++        openTags.pop();
++        result += token;
++      } else {
++        // Unmatched closing tag: turn it into literal text so the payload stays valid.
++        result += escapeHtml(token);
++      }
++    } else if (isHtmlSelfClosingTag(token)) {
++      result += token;
++    } else {
++      openTags.push({ name, openTag: token });
++      result += token;
++    }
++  }
++  result += getHtmlClosingTags(openTags);
++  return result;
++}
++
+ function getHtmlTagName(tag: string): string | undefined {
+   return tag.match(/^<\/?\s*([a-zA-Z][\w-]*)/)?.[1]?.toLowerCase();
+ }
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/routing.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/routing.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/routing.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/routing.ts	2026-09-02 22:06:37
+@@ -10,6 +10,7 @@
+ import * as Commands from "./commands.ts";
+ import type { TelegramConfigStore } from "./config.ts";
+ import type { TelegramInboundHandlerRuntime } from "./inbound.ts";
++import type { TelegramInstanceSpawner } from "./instance-spawner.ts";
+ import * as Media from "./media.ts";
+ import * as Menu from "./menu.ts";
+ import * as Model from "./model.ts";
+@@ -557,6 +558,8 @@
+     TCallbackQuery,
+     TMessage
+   >;
++  /** Spawn a background Pi instance bound to a specific Telegram thread. */
++  instanceSpawner?: TelegramInstanceSpawner;
+   replaceFollowerThreadTarget?: (input: {
+     record: Threads.TelegramTopicTargetRecord;
+     target: Threads.TelegramTopicTargetRecord["target"];
+@@ -2840,6 +2843,26 @@
+         );
+         await textDispatch.handleMessage(message as TMessage, ctx);
+         return;
++      }
++      // Operator-visible new thread: spawn a background Pi instance bound to it,
++      // so a new Telegram tab becomes a live instance without touching a terminal.
++      if (
++        deps.instanceSpawner &&
++        !deps.instanceSpawner.isSpawned(target.chatId, target.threadId)
++      ) {
++        const spawned = await deps.instanceSpawner.spawnForThread({
++          chatId: target.chatId,
++          threadId: target.threadId,
++        });
++        if (spawned.ok) {
++          await deps.sendTextReply(
++            target.chatId,
++            message.message_id,
++            "🚀 正在此线程启动新的 Pi 实例…\n\n新实例就绪后可直接在此对话，无需终端。",
++            { target },
++          );
++          return;
++        }
+       }
+       await sendUnboundRerouteChooser(message as TMessage, ctx);
+       return;
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/telegram-api.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/telegram-api.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/telegram-api.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/telegram-api.ts	2026-09-03 00:50:00
+@@ -57,6 +57,24 @@
+ ]);
+ type TelegramNetworkFamily = 4 | 6;
+ 
++/**
++ * Hard cap for a single Telegram Bot API HTTP call when the caller did not
++ * provide its own AbortSignal (e.g. the long-poll getUpdates loop, which owns
++ * its own signal and timeout). Prevents a stalled socket/proxy from hanging
++ * every downstream caller forever (follower registration provisioning, thread
++ * creation, message sends, ...).
++ */
++const TELEGRAM_API_CALL_TIMEOUT_MS = Math.max(
++  15_000,
++  Number(process.env.PI_TELEGRAM_API_CALL_TIMEOUT_MS ?? 60_000) || 60_000,
++);
++
++function createTelegramApiCallTimeoutError(): Error {
++  return Object.assign(new Error("Telegram API call timed out."), {
++    code: "ETIMEDOUT",
++  });
++}
++
+ export interface TelegramUser {
+   id: number;
+   is_bot: boolean;
+@@ -551,6 +569,19 @@
+     options?: TelegramAnswerGuestQueryOptions,
+   ) => Promise<void>;
+   deleteMessage: (chatId: number, messageId: number) => Promise<void>;
++  pinChatMessage: (
++    chatId: number,
++    messageId: number,
++    options?: {
++      message_thread_id?: number;
++      disable_notification?: boolean;
++    },
++  ) => Promise<boolean>;
++  unpinChatMessage: (
++    chatId: number,
++    messageId: number,
++    options?: { message_thread_id?: number },
++  ) => Promise<boolean>;
+   prepareTempDir: () => Promise<number>;
+ }
+ 
+@@ -931,6 +962,12 @@
+       },
+     );
+     req.on("error", reject);
++    // Stalled sockets must never hold a request open forever. The getUpdates
++    // long-poll owns its own signal/timeout and is unaffected (its timeout is
++    // longer and driven by the polling loop, not this cap).
++    req.setTimeout(TELEGRAM_API_CALL_TIMEOUT_MS, () => {
++      req.destroy(createTelegramApiCallTimeoutError());
++    });
+     if (init.signal) {
+       if (init.signal.aborted)
+         req.destroy(new DOMException("Aborted", "AbortError"));
+@@ -963,7 +1000,26 @@
+   init: RequestInit = {},
+   family?: TelegramNetworkFamily,
+ ): Promise<Response> {
+-  if (!family) return fetch(input, init);
++  if (!family) {
++    // Long-poll and callers that own their own timeout pass a signal and are
++    // exempt from the transport cap. Everything else gets a hard deadline so a
++    // stalled proxy/socket can never hang the caller forever.
++    if (init.signal) return fetch(input, init);
++    const controller = new AbortController();
++    // Not unref'd: the caller is awaiting this call, so the deadline must fire
++    // even when the process is otherwise idle. An unref'd timer is skipped when
++    // the event loop drains, silently turning the "hard" cap into no cap at all
++    // (a hung fetch alone does not keep the loop alive).
++    const timer = setTimeout(
++      () => controller.abort(createTelegramApiCallTimeoutError()),
++      TELEGRAM_API_CALL_TIMEOUT_MS,
++    );
++    try {
++      return await fetch(input, { ...init, signal: controller.signal });
++    } finally {
++      clearTimeout(timer);
++    }
++  }
+   return (telegramHttpsFetchForTesting ?? telegramHttpsFetch)(
+     input,
+     init,
+@@ -1742,6 +1798,25 @@
+         chat_id: chatId,
+         message_id: messageId,
+       }).then(() => {}),
++    pinChatMessage: (chatId, messageId, options) =>
++      callRecorded<boolean>("pinChatMessage", {
++        chat_id: chatId,
++        message_id: messageId,
++        ...(options?.message_thread_id !== undefined
++          ? { message_thread_id: options.message_thread_id }
++          : {}),
++        ...(options?.disable_notification !== undefined
++          ? { disable_notification: options.disable_notification }
++          : {}),
++      }),
++    unpinChatMessage: (chatId, messageId, options) =>
++      callRecorded<boolean>("unpinChatMessage", {
++        chat_id: chatId,
++        message_id: messageId,
++        ...(options?.message_thread_id !== undefined
++          ? { message_thread_id: options.message_thread_id }
++          : {}),
++      }),
+   };
+ }
+ 
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/thread-reconciler.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/thread-reconciler.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/thread-reconciler.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/thread-reconciler.ts	2026-09-03 00:50:00
+@@ -41,6 +41,10 @@
+   id: string;
+   owner: "leader" | "manual-follower";
+   instanceId: string;
++  /** `ambiguous` marks a createForumTopic whose response was lost; such a
++   *  provision stays live until its outcome is resolved (the topic may exist
++   *  server-side) and must keep blocking re-provisioning to avoid duplicates. */
++  status?: "in-flight" | "ambiguous";
+   slot?: string;
+   target?: TelegramTarget & { threadId: number };
+   startedAtMs: number;
+@@ -165,6 +169,13 @@
+       pendingProvisionId: string;
+       instanceId?: string;
+       leaderEpoch?: number | string;
++    }
++  | {
++      kind: "remove-expired-pending-provision";
++      reason: "expired-pending-provision";
++      pendingProvisionId: string;
++      instanceId?: string;
++      leaderEpoch?: number | string;
+     };
+ 
+ export type ThreadReconciliationPhase =
+@@ -288,6 +299,11 @@
+   nowMs: number,
+   currentLeaderEpoch: number | string | undefined,
+ ): boolean {
++  // An `ambiguous` provision (createForumTopic response lost) stays alive until
++  // its outcome is resolved: the topic may exist server-side, so it must keep
++  // blocking re-provisioning and keep its slot. Mirrors
++  // isPendingProvisionLiveOrTargeted in the store.
++  if (provision.status === "ambiguous") return true;
+   if (isPendingProvisionExpired(provision, nowMs)) {
+     return false;
+   }
+@@ -323,7 +339,8 @@
+     action.kind === "close-delete-disconnected-instance-topic" ||
+     action.kind === "close-delete-graceful-shutdown-topic" ||
+     action.kind === "cancel-superseded-graceful-shutdown-cleanup" ||
+-    action.kind === "close-delete-expired-pending-provision-topic"
++    action.kind === "close-delete-expired-pending-provision-topic" ||
++    action.kind === "remove-expired-pending-provision"
+   );
+ }
+ 
+@@ -419,6 +436,14 @@
+ ): boolean {
+   const actionLeaderEpoch = getActionLeaderEpoch(action);
+   const currentLeaderEpoch = ports.getCurrentLeaderEpoch?.();
++  const target = "target" in action ? action.target : undefined;
++  const targetDetail =
++    target !== undefined
++      ? {
++          chatId: target.chatId,
++          threadId: target.threadId,
++        }
++      : {};
+   if (actionLeaderEpoch === undefined) {
+     if (!ports.getCurrentLeaderEpoch) return false;
+     ports.recordRuntimeEvent?.(
+@@ -428,8 +453,7 @@
+         phase: "thread-reconciler-missing-leader-epoch",
+         currentLeaderEpoch,
+         action: action.kind,
+-        chatId: action.target.chatId,
+-        threadId: action.target.threadId,
++        ...targetDetail,
+       },
+     );
+     return true;
+@@ -443,8 +467,7 @@
+       action: action.kind,
+       actionLeaderEpoch,
+       currentLeaderEpoch,
+-      chatId: action.target.chatId,
+-      threadId: action.target.threadId,
++      ...targetDetail,
+     },
+   );
+   return true;
+@@ -537,6 +560,26 @@
+         shouldPersist;
+       continue;
+     }
++    if (action.kind === "remove-expired-pending-provision") {
++      if (shouldSkipForStaleLeaderEpoch(action, ports)) {
++        incompleteActions.push(action);
++        continue;
++      }
++      const changed =
++        ports.removePendingProvisionById?.(action.pendingProvisionId) ?? false;
++      if (changed) persistFences.push(action);
++      shouldPersist = changed || shouldPersist;
++      ports.recordRuntimeEvent?.(
++        "telegram",
++        "Expired pending Telegram topic provision removed",
++        {
++          phase: "thread-reconciler-expired-pending-provision-remove",
++          pendingProvisionId: action.pendingProvisionId,
++          instanceId: action.instanceId,
++        },
++      );
++      continue;
++    }
+     if (action.kind === "cancel-superseded-graceful-shutdown-cleanup") {
+       if (shouldSkipForStaleLeaderEpoch(action, ports)) {
+         incompleteActions.push(action);
+@@ -835,22 +878,42 @@
+     }
+   }
+   for (const provision of input.pendingProvisions ?? []) {
+-    if (!provision.target) continue;
+-    if (!isPendingProvisionExpired(provision, input.nowMs)) continue;
+-    const key = targetKey(provision.target);
+-    if (currentTargets.has(key)) continue;
+-    if (reservedTargets.has(key)) continue;
+-    if (recentOpenTargets.has(key)) continue;
+-    actions.push({
+-      kind: "close-delete-expired-pending-provision-topic",
+-      target: provision.target,
+-      reason: "expired-pending-provision",
+-      pendingProvisionId: provision.id,
+-      instanceId: provision.instanceId,
+-      ...(input.currentLeaderEpoch !== undefined
+-        ? { leaderEpoch: input.currentLeaderEpoch }
+-        : {}),
+-    });
++    if (provision.target) {
++      if (!isPendingProvisionExpired(provision, input.nowMs)) continue;
++      const key = targetKey(provision.target);
++      if (currentTargets.has(key)) continue;
++      if (reservedTargets.has(key)) continue;
++      if (recentOpenTargets.has(key)) continue;
++      actions.push({
++        kind: "close-delete-expired-pending-provision-topic",
++        target: provision.target,
++        reason: "expired-pending-provision",
++        pendingProvisionId: provision.id,
++        instanceId: provision.instanceId,
++        ...(input.currentLeaderEpoch !== undefined
++          ? { leaderEpoch: input.currentLeaderEpoch }
++          : {}),
++      });
++    } else if (
++      provision.status !== "ambiguous" &&
++      isPendingProvisionExpired(provision, input.nowMs)
++    ) {
++      // Target-less pending provision outlived its TTL: the originating
++      // provisioning pass died or stalled before binding a topic. Remove the
++      // dangling intent so it can no longer block re-provisioning for its
++      // profile/instance or hold its slot. Ambiguous provisions are excluded:
++      // they mark a lost createForumTopic response and must stay until their
++      // outcome is resolved, or a successor could create a duplicate topic.
++      actions.push({
++        kind: "remove-expired-pending-provision",
++        reason: "expired-pending-provision",
++        pendingProvisionId: provision.id,
++        instanceId: provision.instanceId,
++        ...(input.currentLeaderEpoch !== undefined
++          ? { leaderEpoch: input.currentLeaderEpoch }
++          : {}),
++      });
++    }
+   }
+ 
+   for (const observation of input.observations ?? []) {
+diff -ruN --exclude=node_modules --exclude=.git --exclude=package-lock.json --exclude=tsconfig.json --exclude=.github --exclude=tests /tmp/pitelegram-upstream/baseline-0.42.2/lib/threads.ts /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/threads.ts
+--- /tmp/pitelegram-upstream/baseline-0.42.2/lib/threads.ts	2026-09-03 00:20:15
++++ /Users/cx/.pi/agent/npm/node_modules/@llblab/pi-telegram/lib/threads.ts	2026-09-03 00:50:00
+@@ -67,6 +67,17 @@
+ 
+ const TELEGRAM_THREAD_RESERVATION_TTL_MS = 15 * 60 * 1000;
+ 
++/**
++ * Bounded lifetime for a target-less pending topic provision. A provisioning
++ * pass writes its intent before calling createForumTopic; if the originating
++ * process dies, is killed, or the API call stalls beyond this TTL, the dangling
++ * record must not block re-provisioning for its profile/instance forever. Kept
++ * above the Telegram API-call timeout so a live call can still finish and clear
++ * its own pending record. Configurable via PI_TELEGRAM_PENDING_PROVISION_TTL_MS.
++ */
++const TELEGRAM_PENDING_PROVISION_TTL_MS =
++  Number(process.env.PI_TELEGRAM_PENDING_PROVISION_TTL_MS) || 120_000;
++
+ export interface TelegramThreadReservation {
+   target: TelegramTarget & { threadId: number };
+   slot: string;
+@@ -3033,9 +3044,33 @@
+       return { target: record.target, reused: true, record };
+     }
+     if (pendingForRequest) {
+-      throw new Error(
+-        `Telegram topic provisioning remains ${pendingForRequest.status ?? "in-flight"} for this instance.`,
+-      );
++      // A target-less pending provision only blocks this profile/instance while
++      // it is genuinely in-flight. If it has outlived its TTL or belongs to a
++      // different leader epoch, the originating pass is dead or superseded:
++      // drop the dangling record and continue provisioning instead of failing.
++      //
++      // An `ambiguous` provision is never stale: it marks a createForumTopic
++      // whose response was lost, so the topic MAY already exist server-side.
++      // Dropping it would let a successor re-provision and create a duplicate
++      // topic, reopening the exact window the ambiguous marker closes. The
++      // store keeps ambiguous provisions live for the same reason
++      // (isPendingProvisionLiveOrTargeted), so the provisioner must stay
++      // consistent and fail closed instead of re-provisioning blindly.
++      const pendingStale =
++        pendingForRequest.status !== "ambiguous" &&
++        ((pendingForRequest.expiresAtMs !== undefined &&
++          pendingForRequest.expiresAtMs <= nowMs) ||
++          (deps.getCurrentLeaderEpoch !== undefined &&
++            pendingForRequest.leaderEpoch !== undefined &&
++            pendingForRequest.leaderEpoch !== deps.getCurrentLeaderEpoch()));
++      if (pendingStale) {
++        deps.store.removePendingProvision(pendingForRequest.id);
++        await deps.store.persist();
++      } else {
++        throw new Error(
++          `Telegram topic provisioning remains ${pendingForRequest.status ?? "in-flight"} for this instance.`,
++        );
++      }
+     }
+     const activeForInstance = deps.store.getActiveByInstanceId(
+       request.instanceId,
+@@ -3088,6 +3123,7 @@
+       threadName: requestThreadName,
+       slot,
+       startedAtMs: nowMs,
++      expiresAtMs: nowMs + TELEGRAM_PENDING_PROVISION_TTL_MS,
+       ...(leaderEpoch !== undefined ? { leaderEpoch } : {}),
+     };
+     deps.store.upsertPendingProvision(pendingBase);

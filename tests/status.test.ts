@@ -1,0 +1,1460 @@
+/**
+ * Regression tests for Telegram status helpers
+ * Covers runtime diagnostics lines and recent-event redaction/ring-buffer behavior
+ */
+
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  buildTelegramBridgeStatusLines,
+  buildTelegramRuntimeEventLines,
+  buildTelegramStatusBarText,
+  clearTelegramStatusLineProviders,
+  createTelegramBridgeStatusRuntime,
+  createTelegramRuntimeDiagnosticsSnapshotScheduler,
+  createTelegramRuntimeEventRecorder,
+  createTelegramRuntimeLogScope,
+  createTelegramStatusHtmlBuilder,
+  createTelegramStatusSnapshot,
+  createTelegramStatusRuntime,
+  getTelegramStatusBarProcessingStatus,
+  recordStructuredTelegramRuntimeEvent,
+  registerTelegramStatusLineProvider,
+  type TelegramRuntimeEvent,
+} from "../lib/status.ts";
+
+test("Status helpers build runtime log scope and persisted snapshot projections", () => {
+  const state = {
+    busRole: "leader" as const,
+    botThreadMode: "enabled" as const,
+    botThreadModeUpdatedAtMs: 10,
+    botThreadModeAction: "probe",
+    instanceSlot: "A",
+    instanceThreadName: "Axial",
+    pollingActive: true,
+    polling: {
+      phase: "persisting-journal",
+      phaseStartedAtMs: 8,
+      currentUpdateId: 12,
+      startedAtMs: 7,
+      lastSuccessfulResponseAtMs: 8,
+      lastSuccessfulResponseUpdateCount: 1,
+    },
+    lockState: "active-here",
+    pendingDispatch: true,
+    compactionInProgress: false,
+    activeToolExecutions: 1,
+    pendingModelSwitch: false,
+    queuedItems: [],
+    busFollowers: [{ instanceId: "follower", lastHeartbeatMs: 5 }],
+    topicTargets: [{ instanceId: "leader", status: "active" }],
+    threadReservations: [{ slot: "B", reason: "startup" }],
+    topicSyncObservations: [{ syncStatus: "open", observedAtMs: 9 }],
+    syncState: { pairing: { status: "fresh" } },
+    recentRuntimeEvents: [],
+  };
+
+  assert.deepEqual(
+    createTelegramRuntimeLogScope({ state, instanceId: "instance-1" }),
+    {
+      instanceId: "instance-1",
+      role: "leader",
+      slot: "A",
+      threadName: "Axial",
+      lockState: "active-here",
+    },
+  );
+  assert.deepEqual(createTelegramStatusSnapshot(state), {
+    runtime: {
+      busRole: "leader",
+      botThreadMode: "enabled",
+      botThreadModeUpdatedAtMs: 10,
+      botThreadModeAction: "probe",
+      instanceSlot: "A",
+      instanceThreadName: "Axial",
+      pollingActive: true,
+      polling: {
+        phase: "persisting-journal",
+        phaseStartedAtMs: 8,
+        currentUpdateId: 12,
+        startedAtMs: 7,
+        lastSuccessfulResponseAtMs: 8,
+        lastSuccessfulResponseUpdateCount: 1,
+      },
+      lockState: "active-here",
+    },
+    liveRoster: {
+      busFollowers: [{ instanceId: "follower", lastHeartbeatMs: 5 }],
+      topicTargets: [{ instanceId: "leader", status: "active" }],
+      reservations: [{ slot: "B", reason: "startup" }],
+      syncObservations: [{ syncStatus: "open", observedAtMs: 9 }],
+    },
+    diagnostics: {
+      pendingDispatch: true,
+      compactionInProgress: false,
+      activeToolExecutions: 1,
+      pendingModelSwitch: false,
+      syncState: { pairing: { status: "fresh" } },
+      threadReconciliation: undefined,
+      recentRuntimeEvents: [],
+    },
+  });
+});
+
+test("Status runtime diagnostics scheduler coalesces snapshot persists", async () => {
+  let scheduled: (() => void) | undefined;
+  let scheduledDelayMs: number | undefined;
+  let persistCount = 0;
+  const errors: unknown[] = [];
+  const schedule = createTelegramRuntimeDiagnosticsSnapshotScheduler({
+    persistSnapshot: async () => {
+      persistCount += 1;
+    },
+    recordError: (error) => errors.push(error),
+    setTimer(callback, ms) {
+      scheduled = callback as () => void;
+      scheduledDelayMs = ms;
+      return { unref() {} } as ReturnType<typeof setTimeout>;
+    },
+  });
+
+  schedule();
+  schedule();
+  scheduled?.();
+  await Promise.resolve();
+
+  assert.equal(scheduledDelayMs, 100);
+  assert.equal(persistCount, 1);
+  assert.deepEqual(errors, []);
+});
+
+test("Status snapshot scheduler serializes in-flight publication and retains one rerun", async () => {
+  const callbacks: Array<() => void> = [];
+  const releases: Array<() => void> = [];
+  let persistCount = 0;
+  const schedule = createTelegramRuntimeDiagnosticsSnapshotScheduler({
+    persistSnapshot: () =>
+      new Promise<void>((resolve) => {
+        persistCount += 1;
+        releases.push(resolve);
+      }),
+    recordError: () => undefined,
+    setTimer(callback) {
+      callbacks.push(callback);
+      return { unref() {} } as ReturnType<typeof setTimeout>;
+    },
+  });
+
+  schedule();
+  callbacks.shift()?.();
+  await Promise.resolve();
+  assert.equal(persistCount, 1);
+  schedule();
+  schedule();
+  assert.equal(callbacks.length, 0);
+  releases.shift()?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(callbacks.length, 1);
+  callbacks.shift()?.();
+  await Promise.resolve();
+  assert.equal(persistCount, 2);
+  releases.shift()?.();
+  await Promise.resolve();
+});
+
+test("Status bar text renders bridge connection and queue states", () => {
+  const theme = {
+    fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+  };
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: false,
+      pollingActive: false,
+      paired: false,
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <muted>not configured</muted>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: true,
+      queuedStatus: " +1",
+    }),
+    "<accent>telegram</accent> <warning>active</warning><success> +1</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: true,
+      processingStatus: "dispatching",
+      queuedStatus: " +1",
+    }),
+    "<accent>telegram</accent> <warning>active</warning><success> +1</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: true,
+      processingStatus: "active",
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <warning>active</warning>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: true,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <success>connected</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: true,
+      processing: true,
+      processingStatus: "active",
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <warning>active</warning>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      instanceThreadName: "Aurora",
+      compactionInProgress: false,
+      processing: true,
+      processingStatus: "queued",
+      queuedStatus: " +2",
+    }),
+    "<accent>telegram</accent> <dim>disconnected</dim><success> +2</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      compactionInProgress: false,
+      processing: true,
+      queuedStatus: " +2",
+      error: "Telegram bus follower is not registered.",
+    }),
+    "<accent>telegram</accent> <dim>disconnected</dim><success> +2</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <success>follower</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      instanceThreadName: "Amber",
+      compactionInProgress: false,
+      processing: true,
+      processingStatus: "active",
+      queuedStatus: "",
+    }),
+    "<accent>Amber</accent> <warning>active</warning>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      busLifecyclePhase: "electing",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <warning>electing</warning>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busLifecyclePhase: "electing",
+      instanceThreadName: "Cinder",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>Cinder</accent> <warning>electing</warning>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      instanceThreadName: "Follower",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <success>follower</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      instanceThreadName: "Lname",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>Lname</accent> <success>follower</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      instanceSlot: "O",
+      instanceThreadName: "extensions Follower",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>extensions Follower</accent> <success>follower</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: false,
+      paired: true,
+      busRole: "follower",
+      instanceSlot: "O",
+      instanceThreadName: "Oname",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>Oname</accent> <success>follower</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      busRole: "leader",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>telegram</accent> <success>leader</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      busRole: "leader",
+      instanceThreadName: "🌙 A-identity",
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    "<accent>🌙 A-identity</accent> <success>leader</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: false,
+      compactionInProgress: false,
+      processing: true,
+      processingStatus: "queued",
+      queuedStatus: " +1",
+    }),
+    "<accent>telegram</accent> <warning>awaiting pairing</warning><success> +1</success>",
+  );
+  assert.equal(
+    buildTelegramStatusBarText(theme, {
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+      error: "typing failed",
+    }),
+    "<accent>telegram</accent> <error>error</error>",
+  );
+});
+
+test("Status runtime updates the status bar and exposes bridge lines", () => {
+  const events: string[] = [];
+  const ctx = {
+    ui: {
+      theme: {
+        fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+      },
+      setStatus: (key: string, text: string) => {
+        events.push(`${key}:${text}`);
+      },
+    },
+  };
+  const runtime = createTelegramStatusRuntime({
+    getStatusBarState: (_ctx, error) => ({
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+      error,
+    }),
+    getBridgeStatusLineState: () => ({
+      botUsername: "demo_bot",
+      allowedUserId: 7,
+      lockState: "active here",
+      pollingActive: true,
+      lastUpdateId: 10,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      recentRuntimeEvents: [],
+    }),
+  });
+  runtime.updateStatus(ctx, "demo error");
+  assert.equal(
+    events[0],
+    "telegram:<accent>telegram</accent> <error>error</error>",
+  );
+  assert.deepEqual(runtime.getStatusLines().slice(0, 3), [
+    "connection:",
+    "- bot: @demo_bot",
+    "- user: 7",
+  ]);
+});
+
+test("Status lines expose polling and inbound-worker progress separately", () => {
+  const state = {
+    botUsername: "demo_bot",
+    allowedUserId: 7,
+    pollingActive: true,
+    polling: {
+      phase: "persisting-journal",
+      phaseStartedAtMs: 2_000,
+      currentUpdateId: 11,
+      startedAtMs: 1_000,
+      lastSuccessfulResponseAtMs: 1_500,
+      lastSuccessfulResponseUpdateCount: 2,
+    },
+    inboundWorker: {
+      phase: "blocked",
+      generation: 3,
+      currentUpdateId: 9,
+      blockedReason: "execution",
+      journalEntryCount: 4,
+      journalSerializedBytes: 2048,
+      oldestAdmittedAtMs: 500,
+      deferredClaimCount: 1,
+      queuedClaimCount: 2,
+      foreignQueuedCount: 1,
+      foreignQueuedOwnerLiveness: "unverifiable" as const,
+      foreignQueuedOwner: {
+        instanceId: "foreign-instance",
+        processId: 44,
+        processBirthId: "44:start:foreign",
+        sessionGeneration: 2,
+        acquisitionId: "foreign-acquisition",
+        acquiredAtMs: 1_000,
+      },
+      retryWaitCount: 1,
+      failedCount: 1,
+      nextRetryUpdateId: 10,
+      nextRetryAtMs: 2_500,
+      nextRetryAttemptCount: 2,
+      nextRetryFailureClass: "transport-failed",
+      failedUpdateId: 9,
+      failedFailureId: "failure-deadbeef",
+      failedAttemptCount: 5,
+      failedClass: "invalid-update",
+      failedSummary: "Deterministic poison update.",
+      terminalFailureAtMs: 1_900,
+      unsettledExecutionCount: 1,
+      lastCompletedUpdateId: 8,
+      lastCompletedAtMs: 1_800,
+      lastFailureAtMs: 1_900,
+      lastFailurePhase: "execution",
+    },
+    lastUpdateId: 10,
+    pendingDispatch: false,
+    compactionInProgress: false,
+    activeToolExecutions: 0,
+    pendingModelSwitch: false,
+    queuedItems: [],
+    recentRuntimeEvents: [],
+  };
+
+  const compact = buildTelegramBridgeStatusLines(state);
+  assert.ok(compact.includes("- polling: running (persisting-journal)"));
+  assert.ok(
+    compact.includes(
+      "- inbound worker: blocked (depth=4, queued=2, foreign=1, deferred=1, retry=1, failed=1)",
+    ),
+  );
+
+  const diagnostic = buildTelegramBridgeStatusLines(state, { verbose: true });
+  assert.ok(diagnostic.includes("- phase: persisting-journal"));
+  assert.ok(diagnostic.includes("- current update id: 11"));
+  assert.ok(diagnostic.includes("inbound worker:"));
+  assert.ok(diagnostic.includes("- journal: entries=4, bytes=2048"));
+  assert.ok(
+    diagnostic.includes(
+      "- claims: queued=2, foreign-queued=1, deferred=1, unsettled=1",
+    ),
+  );
+  assert.ok(
+    diagnostic.includes(
+      "- queued semantic owner: instance=foreign-instance, pid=44, birth=44:start:foreign, session=2, acquisition=foreign-acquisition, liveness=unverifiable",
+    ),
+  );
+  assert.ok(
+    diagnostic.includes(
+      "- next retry: update=10, attempt=2, class=transport-failed at 1970-01-01T00:00:02.500Z",
+    ),
+  );
+  assert.ok(
+    diagnostic.includes(
+      "- terminal update: id=9, failure=failure-deadbeef, attempts=5, class=invalid-update at 1970-01-01T00:00:01.900Z",
+    ),
+  );
+  assert.ok(
+    diagnostic.includes("- terminal summary: Deterministic poison update."),
+  );
+  assert.equal(diagnostic.includes("- operator action:"), false);
+  assert.ok(diagnostic.includes("- blocked reason: execution"));
+  assert.ok(
+    diagnostic.includes(
+      "- last successful response: 1970-01-01T00:00:01.500Z (updates=2)",
+    ),
+  );
+});
+
+test("Status lines expose thread reconciliation state", () => {
+  const lines = buildTelegramBridgeStatusLines({
+    botUsername: "demo_bot",
+    allowedUserId: 7,
+    pollingActive: true,
+    lastUpdateId: 10,
+    pendingDispatch: false,
+    compactionInProgress: false,
+    activeToolExecutions: 0,
+    pendingModelSwitch: false,
+    queuedItems: [],
+    threadReconciliation: {
+      phase: "cleanup-required",
+      event: "cleanup-required",
+      atMs: 1000,
+      leaderEpoch: 3,
+      pendingProvisionCount: 1,
+      syncActionCount: 2,
+      cleanupActionCount: 1,
+    },
+    recentRuntimeEvents: [],
+  });
+
+  assert.ok(lines.includes("reconciliation:"));
+  assert.ok(
+    lines.includes("- phase: cleanup-required event=cleanup-required epoch=3"),
+  );
+  assert.ok(lines.includes("- counts: pending=1, sync=2, cleanup=1"));
+});
+
+test("Status runtime propagates status update failures to safety wrappers", () => {
+  const runtime = createTelegramStatusRuntime({
+    getStatusBarState: () => ({
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    getBridgeStatusLineState: () => ({
+      botUsername: undefined,
+      allowedUserId: undefined,
+      pollingActive: false,
+      lastUpdateId: undefined,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      recentRuntimeEvents: [],
+    }),
+  });
+  assert.throws(
+    () =>
+      runtime.updateStatus({
+        ui: {
+          theme: { fg: (_token: string, text: string) => text },
+          setStatus: () => {
+            throw new Error("ctx is stale after session reload");
+          },
+        },
+      }),
+    /stale after session/,
+  );
+});
+
+test("Status bar processing labels prefer the most specific live state", () => {
+  assert.equal(
+    getTelegramStatusBarProcessingStatus({
+      hasActiveTurn: true,
+      hasPendingDispatch: true,
+      hasPendingModelSwitch: true,
+      activeToolExecutions: 1,
+      queuedItems: 1,
+    }),
+    "model",
+  );
+  assert.equal(
+    getTelegramStatusBarProcessingStatus({
+      hasActiveTurn: true,
+      hasPendingDispatch: false,
+      hasPendingModelSwitch: false,
+      activeToolExecutions: 1,
+      queuedItems: 1,
+    }),
+    "active",
+  );
+  assert.equal(
+    getTelegramStatusBarProcessingStatus({
+      hasActiveTurn: false,
+      hasPendingDispatch: false,
+      hasPendingModelSwitch: false,
+      activeToolExecutions: 1,
+      queuedItems: 1,
+    }),
+    "active",
+  );
+  assert.equal(
+    getTelegramStatusBarProcessingStatus({
+      hasActiveTurn: false,
+      hasPendingDispatch: true,
+      hasPendingModelSwitch: false,
+      activeToolExecutions: 0,
+      queuedItems: 1,
+    }),
+    "dispatching",
+  );
+  assert.equal(
+    getTelegramStatusBarProcessingStatus({
+      hasActiveTurn: false,
+      hasPendingDispatch: false,
+      hasPendingModelSwitch: false,
+      activeToolExecutions: 0,
+      queuedItems: 1,
+    }),
+    "queued",
+  );
+});
+
+test("Bridge status runtime stays active while tools run after queue changes", () => {
+  const events: string[] = [];
+  const runtime = createTelegramBridgeStatusRuntime({
+    getConfig: () => ({
+      botToken: "token",
+      botUsername: "demo_bot",
+      allowedUserId: 7,
+    }),
+    isPollingActive: () => true,
+    getActiveSourceMessageIds: () => undefined,
+    hasActiveTurn: () => false,
+    hasDispatchPending: () => false,
+    isCompactionInProgress: () => false,
+    getActiveToolExecutions: () => 1,
+    hasPendingModelSwitch: () => false,
+    getQueuedItems: () => [],
+    formatQueuedStatus: () => "",
+    getRecentRuntimeEvents: () => [],
+  });
+  runtime.updateStatus({
+    ui: {
+      theme: {
+        fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+      },
+      setStatus: (key: string, text: string) => {
+        events.push(`${key}:${text}`);
+      },
+    },
+  });
+  assert.equal(
+    events[0],
+    "telegram:<accent>telegram</accent> <warning>active</warning>",
+  );
+});
+
+test("Bridge status runtime excludes skipped items from queued processing", () => {
+  const events: string[] = [];
+  const runtime = createTelegramBridgeStatusRuntime({
+    getConfig: () => ({ botToken: "token", allowedUserId: 7 }),
+    isPollingActive: () => true,
+    getActiveSourceMessageIds: () => undefined,
+    hasActiveTurn: () => false,
+    hasDispatchPending: () => false,
+    isCompactionInProgress: () => false,
+    getActiveToolExecutions: () => 0,
+    hasPendingModelSwitch: () => false,
+    getQueuedItems: () => [{ queueLane: "default" as const }],
+    getQueuedItemCount: () => 0,
+    formatQueuedStatus: () => "",
+    getRecentRuntimeEvents: () => [],
+  });
+  runtime.updateStatus({
+    ui: {
+      theme: {
+        fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+      },
+      setStatus: (key: string, text: string) => events.push(`${key}:${text}`),
+    },
+  });
+  assert.equal(
+    events[0],
+    "telegram:<accent>telegram</accent> <success>connected</success>",
+  );
+});
+
+test("Bridge status runtime builds status state from live ports", () => {
+  const events: string[] = [];
+  const runtime = createTelegramBridgeStatusRuntime({
+    getConfig: () => ({
+      botToken: "token",
+      botUsername: "demo_bot",
+      allowedUserId: 7,
+      lastUpdateId: 99,
+    }),
+    getActiveProfileName: () => undefined,
+    isPollingActive: () => true,
+    getActiveSourceMessageIds: () => [1, 2],
+    hasActiveTurn: () => false,
+    hasDispatchPending: () => true,
+    isCompactionInProgress: () => false,
+    getActiveToolExecutions: () => 3,
+    hasPendingModelSwitch: () => true,
+    getQueuedItems: () => [{ queueLane: "control" as const }],
+    formatQueuedStatus: () => " +1",
+    getRecentRuntimeEvents: () => [
+      { at: 1000, category: "api", message: "ok" },
+    ],
+    getRuntimeLockState: () => "active here",
+  });
+  runtime.updateStatus({
+    ui: {
+      theme: {
+        fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+      },
+      setStatus: (key: string, text: string) => {
+        events.push(`${key}:${text}`);
+      },
+    },
+  });
+  assert.equal(
+    events[0],
+    "telegram:<accent>telegram</accent> <warning>active</warning><success> +1</success>",
+  );
+  assert.deepEqual(runtime.getStatusLines(), [
+    "connection:",
+    "- bot: @demo_bot",
+    "- profile: default",
+    "- user: 7",
+    "- owner: active here",
+    "",
+    "health:",
+    "- polling: running",
+    "- state: pending dispatch",
+    "- queued turns: 1 (control=1, priority=0, default=0)",
+    "- active tools: 3",
+    "- pending model switch: yes",
+    "",
+    "diagnostics:",
+    "- state: ~/.pi/agent/tmp/telegram/state.json",
+    "- logs: ~/.pi/agent/tmp/telegram/logs.jsonl",
+    "- full dump: /telegram-status --debug",
+  ]);
+});
+
+test("Bridge status lines render named-profile diagnostic paths", () => {
+  const lines = buildTelegramBridgeStatusLines({
+    activeProfileName: "work",
+    botUsername: "work_bot",
+    pollingActive: false,
+    pendingDispatch: false,
+    compactionInProgress: false,
+    activeToolExecutions: 0,
+    pendingModelSwitch: false,
+    queuedItems: [],
+    recentRuntimeEvents: [],
+  });
+  assert.ok(
+    lines.includes("- state: ~/.pi/agent/tmp/telegram/state.work.json"),
+  );
+  assert.ok(
+    lines.includes("- logs: ~/.pi/agent/tmp/telegram/logs.work.jsonl"),
+  );
+});
+
+test("Bridge status lines distinguish unknown bot identity from missing config", () => {
+  const base = {
+    allowedUserId: 42,
+    pollingActive: true,
+    lastUpdateId: 100,
+    pendingDispatch: false,
+    compactionInProgress: false,
+    activeToolExecutions: 0,
+    pendingModelSwitch: false,
+    queuedItems: [],
+    recentRuntimeEvents: [],
+  };
+  assert.equal(
+    buildTelegramBridgeStatusLines({ ...base, hasBotToken: true })[1],
+    "- bot: unknown",
+  );
+  assert.equal(
+    buildTelegramBridgeStatusLines({ ...base, hasBotToken: false })[1],
+    "- bot: not configured",
+  );
+});
+
+test("Bridge status lines include role, instance, and protocol identity", () => {
+  const state = {
+    botUsername: "demo_bot",
+    allowedUserId: 42,
+    busRole: "leader" as const,
+    busProtocol: {
+      protocolVersion: 1,
+      runtimeBuild: "0.28.0",
+      capabilities: [],
+    },
+    instanceSlot: "A",
+    instanceThreadName: "A-identity",
+    pollingActive: true,
+    lastUpdateId: 100,
+    pendingDispatch: false,
+    compactionInProgress: false,
+    activeToolExecutions: 0,
+    pendingModelSwitch: false,
+    queuedItems: [],
+    recentRuntimeEvents: [],
+  };
+  const lines = buildTelegramBridgeStatusLines(state);
+
+  assert.deepEqual(lines.slice(0, 5), [
+    "connection:",
+    "- bot: @demo_bot",
+    "- user: 42",
+    "- role: leader",
+    "- instance: A-identity",
+  ]);
+  assert.ok(
+    buildTelegramBridgeStatusLines(state, { verbose: true }).includes(
+      "- bus protocol=v1 build=0.28.0 capabilities=none",
+    ),
+  );
+});
+
+test("Bridge status lines include sync slice diagnostics", () => {
+  const lines = buildTelegramBridgeStatusLines(
+    {
+      botUsername: "demo_bot",
+      allowedUserId: 42,
+      pollingActive: true,
+      lastUpdateId: 100,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      syncState: {
+        "topic-state": {
+          status: "fresh",
+          updatedAtMs: 2000,
+          lastReconcileAction: "topic-lifecycle",
+        },
+        "transport-health": {
+          status: "suspect",
+          suspectAtMs: 3000,
+          reason: "rate limited",
+        },
+      },
+      recentRuntimeEvents: [],
+    },
+    { verbose: true },
+  );
+  assert.ok(lines.includes("sync:"));
+  assert.ok(lines.includes("- topic-state: fresh reconcile=topic-lifecycle"));
+  assert.ok(lines.includes("- transport-health: suspect reason=rate limited"));
+});
+
+test("Bridge status lines include bot thread capability diagnostics", () => {
+  const lines = buildTelegramBridgeStatusLines(
+    {
+      botUsername: "demo_bot",
+      allowedUserId: 42,
+      botThreadMode: "disabled",
+      botThreadModeAction: "thread-mode-unavailable",
+      pollingActive: true,
+      lastUpdateId: 100,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      recentRuntimeEvents: [],
+    },
+    { verbose: true },
+  );
+  assert.ok(
+    lines.includes("- thread mode: disabled reconcile=thread-mode-unavailable"),
+  );
+});
+
+test("Bridge status lines include topic binding diagnostics", () => {
+  const lines = buildTelegramBridgeStatusLines(
+    {
+      botUsername: "demo_bot",
+      allowedUserId: 42,
+      pollingActive: true,
+      lastUpdateId: 100,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      topicTargets: [
+        {
+          instanceId: "inst-a",
+          status: "active",
+          target: { chatId: 42, threadId: 10 },
+          slot: "B",
+          threadName: "Beacon",
+          syncStatus: "open",
+          lastSyncObservedAtMs: 1000,
+          lastSyncProbeAtMs: 2000,
+          lastReconcileAction: "leader-startup-probe",
+        },
+        {
+          instanceId: "inst-a",
+          status: "starting",
+          target: { chatId: 42, threadId: 11 },
+          slot: "C",
+          threadName: "Cedar",
+        },
+        { instanceId: "inst-b", status: "offline", slot: "D" },
+      ],
+      threadReservations: [
+        {
+          instanceId: "old-leader",
+          target: { chatId: 42, threadId: 9 },
+          slot: "A",
+          reason: "previous-process-still-probes-alive",
+          lastReconcileAction: "leader-topic-previous-instance-still-live",
+        },
+      ],
+      topicSyncObservations: [
+        {
+          instanceId: "closed-inst",
+          target: { chatId: 42, threadId: 8 },
+          slot: "D",
+          syncStatus: "closed",
+          observedAtMs: 3000,
+          lastReconcileAction: "mark-stale",
+        },
+      ],
+      recentRuntimeEvents: [],
+    },
+    { verbose: true },
+  );
+  assert.deepEqual(lines.slice(18, 21), [
+    "topics:",
+    "- active bindings: instances=1, targets=2",
+    "- duplicate inst-a: 2 active threads Beacon target 42:10, Cedar target 42:11",
+  ]);
+  assert.ok(
+    lines.includes(
+      "- Beacon target 42:10 sync=open observed=1970-01-01T00:00:01.000Z probed=1970-01-01T00:00:02.000Z reconcile=leader-startup-probe",
+    ),
+  );
+  assert.ok(lines.includes("- Cedar target 42:11"));
+  assert.ok(
+    lines.includes(
+      "- reservation [A] target 42:9 reason=previous-process-still-probes-alive instance=old-leader reconcile=leader-topic-previous-instance-still-live",
+    ),
+  );
+  assert.ok(
+    lines.includes(
+      "- sync [D] target 42:8 sync=closed observed=1970-01-01T00:00:03.000Z instance=closed-inst reconcile=mark-stale",
+    ),
+  );
+});
+
+test("Bridge status lines include bus follower diagnostics when present", () => {
+  const lines = buildTelegramBridgeStatusLines(
+    {
+      botUsername: "demo_bot",
+      allowedUserId: 42,
+      pollingActive: true,
+      lastUpdateId: 100,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      busNowMs: 20_000,
+      busFollowers: [
+        {
+          instanceId: "inst-a",
+          cwd: "/repo/a",
+          lastHeartbeatMs: 18_600,
+          target: { chatId: -1007, threadId: 42 },
+          protocol: {
+            protocolVersion: 1,
+            runtimeBuild: "0.28.1",
+            capabilities: [],
+          },
+          threadName: "Ember",
+        },
+        { instanceId: "inst-b", lastHeartbeatMs: 12_000 },
+      ],
+      recentRuntimeEvents: [],
+    },
+    { verbose: true },
+  );
+  assert.deepEqual(lines.slice(19, 24), [
+    "bus:",
+    "- followers: 2",
+    "- inst-a: Ember heartbeat 1s ago target -1007:42 /repo/a protocol=v1 build=0.28.1 capabilities=none",
+    "- inst-b: heartbeat 8s ago",
+    "",
+  ]);
+});
+
+test("Bridge status lines include local bus diagnostics", () => {
+  const lines = buildTelegramBridgeStatusLines(
+    {
+      botUsername: "demo_bot",
+      allowedUserId: 42,
+      pollingActive: false,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      localBus: {
+        leaderSocketPath: "\\\\.\\pipe\\pi-telegram-demo-bus",
+        leaderTransport: "pipe",
+        followerSocketPath: "\\\\.\\pipe\\pi-telegram-demo-follower",
+        followerTransport: "pipe",
+        followerRegistered: true,
+        followerTarget: { chatId: 42, threadId: 9 },
+        followerThreadName: "Boreal",
+        leaderProtocol: {
+          protocolVersion: 1,
+          runtimeBuild: "0.28.0",
+          capabilities: ["durable-follower-admission-v1"],
+        },
+      },
+      recentRuntimeEvents: [],
+    },
+    { verbose: true },
+  );
+  assert.ok(lines.includes("local bus:"));
+  assert.ok(
+    lines.includes(
+      "- follower registered: yes Boreal target 42:9 protocol=v1 build=0.28.0 capabilities=durable-follower-admission-v1",
+    ),
+  );
+  assert.ok(
+    lines.includes(
+      "- leader endpoint [pipe]: \\\\.\\pipe\\pi-telegram-demo-bus",
+    ),
+  );
+  assert.ok(
+    lines.includes(
+      "- follower endpoint [pipe]: \\\\.\\pipe\\pi-telegram-demo-follower",
+    ),
+  );
+});
+
+test("Bridge status lines include queue lanes and recent runtime events", () => {
+  const lines = buildTelegramBridgeStatusLines(
+    {
+      botUsername: "demo_bot",
+      allowedUserId: 42,
+      pollingActive: true,
+      lastUpdateId: 100,
+      activeSourceMessageIds: [7, 8],
+      pendingDispatch: true,
+      compactionInProgress: false,
+      activeToolExecutions: 2,
+      pendingModelSwitch: true,
+      queuedItems: [
+        { queueLane: "control" },
+        { queueLane: "priority" },
+        { queueLane: "default" },
+        { queueLane: "default" },
+      ],
+      recentRuntimeEvents: [
+        { at: 1, category: "api:sendMessage", message: "rate limited" },
+      ],
+    },
+    { verbose: true },
+  );
+  assert.deepEqual(lines, [
+    "connection:",
+    "- bot: @demo_bot",
+    "- allowed user: 42",
+    "",
+    "polling:",
+    "- state: running",
+    "- last update id: 100",
+    "",
+    "execution:",
+    "- active turn: 7,8",
+    "- pending dispatch: yes",
+    "- compaction: idle",
+    "- active tools: 2",
+    "- pending model switch: yes",
+    "",
+    "queue:",
+    "- queued turns: 4",
+    "- lanes: control=1, priority=1, default=2",
+    "",
+    "recent runtime events:",
+    "- summary: api:sendMessage=1",
+    "- 1970-01-01T00:00:00.001Z api:sendMessage: rate limited",
+  ]);
+});
+
+test("Status HTML builder binds active model lookup", () => {
+  const model = { provider: "openai", id: "gpt-5", contextWindow: 1000 };
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => model,
+  });
+  const html = buildStatusHtml({
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => ({ percent: 0, contextWindow: undefined }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.match(html, /Status.*idle/s);
+  assert.match(html, /Context.*0\.0%\/1\.0k/s);
+  assert.doesNotMatch(html, /<b>Tokens:<\/b>/s);
+});
+
+test("Status HTML separates token and cache telemetry", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => ({ contextWindow: 1000 }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: {
+      getEntries: () => [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 100,
+              output: 20,
+              cacheRead: 900,
+              cacheWrite: 0,
+              cost: { total: 0 },
+            },
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 150,
+              output: 30,
+              cacheRead: 800,
+              cacheWrite: 50,
+              cost: { total: 0 },
+            },
+          },
+        },
+      ],
+    },
+    getContextUsage: () => ({ percent: 10, contextWindow: 1000 }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+
+  assert.match(
+    html,
+    /<b>Tokens:<\/b> <code>↑250 ↓50<\/code>\n<b>Cache:<\/b> <code>R1\.7k W50 CH80\.0%<\/code>\n<b>Context:<\/b>/s,
+  );
+});
+
+test("Status HTML builder appends Threaded Mode bus role to status row", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => undefined,
+    getBridgeStatusLineState: () => ({
+      hasBotToken: true,
+      botThreadMode: "enabled",
+      busRole: "leader",
+      instanceThreadName: "Dune",
+      pollingActive: true,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      recentRuntimeEvents: [],
+    }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => ({ percent: 0, contextWindow: 1000 }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.match(html, /<b>Status:<\/b> <code>idle @leader<\/code>/);
+  assert.doesNotMatch(html, /<b>Thread:<\/b>/);
+  assert.doesNotMatch(html, /Telegram/s);
+});
+
+test("Status HTML builder includes extension-provided status lines", () => {
+  clearTelegramStatusLineProviders();
+  const unregisterCodex = registerTelegramStatusLineProvider(
+    ({ activeModel }) =>
+      activeModel?.contextWindow === 1000
+        ? { label: "codex", value: "████ 23.7h" }
+        : undefined,
+    { id: "@scope/codex" },
+  );
+  const unregisterBroken = registerTelegramStatusLineProvider(
+    () => {
+      throw new Error("optional provider failed");
+    },
+    { id: "@scope/broken" },
+  );
+  try {
+    const buildStatusHtml = createTelegramStatusHtmlBuilder({
+      getActiveModel: () => ({ contextWindow: 1000 }),
+    });
+    const html = buildStatusHtml({
+      sessionManager: { getEntries: () => [] },
+      getContextUsage: () => ({ percent: 0, contextWindow: undefined }),
+      isIdle: () => true,
+      modelRegistry: { isUsingOAuth: () => false },
+    });
+    assert.match(html, /Context.*0\.0%\/1\.0k/s);
+    assert.match(html, /Codex.*████ 23\.7h/s);
+  } finally {
+    unregisterCodex();
+    unregisterBroken();
+    clearTelegramStatusLineProviders();
+  }
+});
+
+test("Status HTML reports compaction before generic active state", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => undefined,
+    isCompactionInProgress: () => true,
+  });
+  const html = buildStatusHtml({
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => ({ percent: 0, contextWindow: 1000 }),
+    isIdle: () => false,
+    hasPendingMessages: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.match(html, /<b>Status:<\/b> <code>compacting<\/code>/u);
+});
+
+test("Runtime event lines render the recent-event ring newest first", () => {
+  assert.deepEqual(buildTelegramRuntimeEventLines([]), [
+    "recent runtime events: none",
+  ]);
+  assert.deepEqual(
+    buildTelegramRuntimeEventLines([
+      { at: 0, category: "poll", message: "started" },
+      { at: 1000, category: "api:sendMessage", message: "rate limited" },
+    ]),
+    [
+      "recent runtime events:",
+      "- summary: api:sendMessage=1, poll=1",
+      "- 1970-01-01T00:00:01.000Z api:sendMessage: rate limited",
+      "- 1970-01-01T00:00:00.000Z poll: started",
+    ],
+  );
+});
+
+test("Structured runtime event recording redacts messages and details", () => {
+  const events: TelegramRuntimeEvent[] = [];
+  recordStructuredTelegramRuntimeEvent(
+    events,
+    {
+      category: "api",
+      error: new Error("token 123:abc failed"),
+      details: { method: "sendMessage", token: "123:abc", retryable: true },
+    },
+    { botToken: "123:abc", maxEvents: 3, now: 1000 },
+  );
+  assert.deepEqual(events, [
+    {
+      at: 1000,
+      category: "api",
+      message: "token <redacted-token> failed",
+      details: {
+        method: "sendMessage",
+        token: "<redacted-token>",
+        retryable: true,
+      },
+    },
+  ]);
+  assert.deepEqual(buildTelegramRuntimeEventLines(events), [
+    "recent runtime events:",
+    "- summary: api:sendMessage=1",
+    '- 1970-01-01T00:00:01.000Z api:sendMessage: token <redacted-token> failed (token="<redacted-token>", retryable=true)',
+  ]);
+});
+
+test("Runtime event recording bounds messages and string details", () => {
+  const events: TelegramRuntimeEvent[] = [];
+  recordStructuredTelegramRuntimeEvent(
+    events,
+    {
+      category: "handler",
+      error: new Error("x".repeat(1200)),
+      details: { output: "y".repeat(1200) },
+    },
+    { maxEvents: 3, now: 1000 },
+  );
+
+  assert.equal(events[0]?.message.length, 1023);
+  assert.match(events[0]?.message ?? "", /truncated 200 chars/);
+  assert.equal(String(events[0]?.details?.output).length, 1023);
+  assert.match(String(events[0]?.details?.output), /truncated 200 chars/);
+});
+
+test("Runtime event recorder owns redacted bounded event state", () => {
+  const recorder = createTelegramRuntimeEventRecorder({
+    getBotToken: () => "123:abc",
+    maxEvents: 1,
+    now: () => 1000,
+  });
+  recorder.record("api", new Error("token 123:abc failed"), {
+    method: "sendMessage",
+  });
+  recorder.record("poll", "ok");
+  assert.deepEqual(recorder.getEvents(), [
+    { at: 1000, category: "poll", message: "ok" },
+  ]);
+  recorder.clear();
+  assert.deepEqual(recorder.getEvents(), []);
+});
+
+test("Runtime event recording redacts bot tokens and keeps a bounded ring", () => {
+  const events: TelegramRuntimeEvent[] = [];
+  recordStructuredTelegramRuntimeEvent(
+    events,
+    { category: "one", error: new Error("token 123:abc failed") },
+    {
+      botToken: "123:abc",
+      maxEvents: 3,
+      now: 1,
+    },
+  );
+  assert.deepEqual(events, [
+    { at: 1, category: "one", message: "token <redacted-token> failed" },
+  ]);
+  recordStructuredTelegramRuntimeEvent(
+    events,
+    { category: "two", error: "plain" },
+    { botToken: "123:abc", maxEvents: 3, now: 2 },
+  );
+  recordStructuredTelegramRuntimeEvent(
+    events,
+    { category: "three", error: "last" },
+    { botToken: "123:abc", maxEvents: 2, now: 3 },
+  );
+  assert.deepEqual(events, [
+    { at: 2, category: "two", message: "plain" },
+    { at: 3, category: "three", message: "last" },
+  ]);
+});
+
+test("Status runtime skips the status bar when the host theme is uninitialized", () => {
+  const events: string[] = [];
+  const ctx = {
+    ui: {
+      get theme(): never {
+        throw new Error("Theme not initialized. Call initTheme() first.");
+      },
+      setStatus: (key: string, text: string) => {
+        events.push(`${key}:${text}`);
+      },
+    },
+  };
+  const runtime = createTelegramStatusRuntime({
+    getStatusBarState: () => ({
+      hasBotToken: true,
+      pollingActive: true,
+      paired: true,
+      compactionInProgress: false,
+      processing: false,
+      queuedStatus: "",
+    }),
+    getBridgeStatusLineState: () => ({
+      botUsername: undefined,
+      allowedUserId: undefined,
+      lockState: "active here",
+      pollingActive: false,
+      lastUpdateId: undefined,
+      pendingDispatch: false,
+      compactionInProgress: false,
+      activeToolExecutions: 0,
+      pendingModelSwitch: false,
+      queuedItems: [],
+      recentRuntimeEvents: [],
+    }),
+  });
+
+  assert.doesNotThrow(() => runtime.updateStatus(ctx as never));
+  assert.deepEqual(events, []);
+});
