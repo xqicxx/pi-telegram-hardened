@@ -41,7 +41,9 @@ export function escapeHtmlAttribute(text: string): string {
  */
 export function balanceTelegramHtml(html: string): string {
   const openTags: OpenHtmlTag[] = [];
-  const tagOrTextPattern = /<\/?[a-zA-Z][^>]*>|[^<]+/g;
+  // A lone `<` that does not start a real tag must be kept as escaped literal
+  // text instead of being silently dropped by the matcher.
+  const tagOrTextPattern = /<\/?[a-zA-Z][^>]*>|[^<]+|</g;
   let result = "";
   for (const match of html.matchAll(tagOrTextPattern)) {
     const token = match[0];
@@ -51,7 +53,8 @@ export function balanceTelegramHtml(html: string): string {
     }
     const name = getHtmlTagName(token);
     if (!name || TELEGRAM_VOID_HTML_TAGS.has(name)) {
-      result += token;
+      // Not a tag at all (a stray `<`): keep the literal text visible and safe.
+      result += token === "<" ? "&lt;" : token;
       continue;
     }
     if (isHtmlClosingTag(token)) {

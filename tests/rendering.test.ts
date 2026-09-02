@@ -705,3 +705,13 @@ test("Chunked list, code, quote, and prose cycles stay balanced across transitio
     );
   }
 });
+
+test("balanceTelegramHtml preserves stray less-than as literal text (B3)", () => {
+  // A raw `<` that does not start a real tag must be kept, escaped, instead of
+  // silently dropped by the tokenizer.
+  assert.equal(balanceTelegramHtml("if a < b then c"), "if a &lt; b then c");
+  assert.equal(balanceTelegramHtml("x < 3"), "x &lt; 3");
+  // Real tags still balance and escape correctly.
+  assert.equal(balanceTelegramHtml("<b>a < b</b>"), "<b>a &lt; b</b>");
+  assert.equal(balanceTelegramHtml("a </b> b"), "a &lt;/b&gt; b");
+});
