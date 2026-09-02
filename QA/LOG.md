@@ -75,3 +75,28 @@
 
 ---
 *R1 完成：审查→测试→修复→回归→发布推送全链路。*
+
+## 会话 R2 (2026-09-03 ~01:00)
+
+### R2a: 集成路径验证
+- pi-telegram-working 扩展 ↔ Activity API 契约：完全兼容（send/edit/delete、pin 透传、全部 event types）
+- pin 功能端到端接线确认：activity send → sendTelegramView → runtime.sendView → pinMessage → api.pinChatMessage；index.ts 经 createTelegramBridgeDeliveryLifecycleHooks 正确传入
+- bus-api withDefaultThreadTarget：topic 场景正确补 message_thread_id
+- **RPC 模式确认**：pi docs rpc.md 明确"Extension commands (e.g. /mycommand) 立即执行"→ spawner 注入 `{"type":"prompt","message":"/telegram-connect"}` 可行
+- telegram-connect 命令 → startPolling → (bus 启用时) startBusLeaderPolling；follower 通过 registerFollowerWithLeader + env target 绑定
+- createForumTopic 429 路径：非 commit-unknown 立即 remove pending（不残留）；ambiguous 由 B4 保护
+- **生产问题根因链确认**：Surge 代理卡 → createForumTopic 响应丢失(ambiguous) → B4 旧 bug 让 TTL 丢弃 ambiguous → 重试建新主题 → 连环建主题 → 429。B4 + probe 5s + B10(deadline 真触发) 三修复正好堵死此链
+
+### R2b: B3 加固（已实现+推送）
+- balanceTelegramHtml 加 `|` 备用分支：裸 `<` 转义为 &lt; 而非被 tokenizer 丢弃
+- 新测试：rendering.test.ts "preserves stray less-than"（1730 tests 全绿）
+
+### R2b: B5 决策
+- 保持"已知限制"：spawn 失败通过 recordRuntimeEvent 进 diagnostics（/telegram-status 可见），
+  不做跨模块线程内通知（无 live 测试环境下新增跨模块耦合风险 > 收益）
+- 已记录实现方案供后续轮次
+
+### R2c: 发布验证
+- npm run typecheck / pack:check 通过（104 文件，842KB）
+- release 目录全量：1730 tests / 1727 pass / 0 fail
+- 推送 GitHub：B3 commit (319de0f)
