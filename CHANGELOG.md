@@ -14,6 +14,7 @@
 - `Spawner Lifecycle Hygiene`: Background-instance tracking now releases exited children from concurrency accounting (so the 4-instance cap applies to live instances, not total ever spawned), keeps a per-thread respawn cooldown against crash loops, guards stale child exits from deleting a replacement, and unrefs bookkeeping timers without unrefing awaited deadlines.
 - `Hard-Deadline Delivery`: The Telegram API transport cap and follower-provisioning timeout are no longer unref'd, so a stalled proxy/socket is actually bounded even when the process is otherwise idle instead of silently skipping the deadline and hanging the caller forever.
 - `Stray-Entity Hardening`: The activity HTML balancer now preserves a lone `<` that does not start a real tag as escaped literal text instead of silently dropping the token, so no reasoning text can be lost at the Telegram parse boundary.
+- `Spawn-Failure Hygiene`: A background instance whose process fails to launch (for example `pi` missing from PATH) now releases its thread and concurrency slot through the same exit-cooldown path instead of leaving a phantom `starting` instance that blocks the thread forever.
 
 ## 0.42.2: Telegram Comment Membrane
 

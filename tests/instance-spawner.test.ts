@@ -175,3 +175,35 @@ test("Spawner dedup cooldown applies per thread, not globally", async () => {
   assert.equal(other.ok, true, "unrelated threads must not be blocked");
   spawner.stop();
 });
+
+test("Spawner releases a thread when spawn fails outright (B11)", async () => {
+  const spawner = createTelegramInstanceSpawner({
+    // A non-existent executable makes spawn() emit "error" (ENOENT) instead
+    // of an "exit" event; the thread must not stay wedged as "starting".
+    piCommand: "/nonexistent/pi-binary-that-does-not-exist",
+    getNowMs: () => 1000,
+    getLogDir: () => "/tmp",
+  });
+  const result = await spawner.spawnForThread({ chatId: 1, threadId: 2 });
+  assert.equal(result.ok, true, "spawn returns ok before async failure");
+
+  await waitFor(() =>
+    spawner.list().some((i) => i.threadId === 2 && i.status === "exited"),
+  );
+  assert.equal(
+    spawner.list().filter((i) => i.status === "starting").length,
+    0,
+    "failed spawn must leave no phantom starting instance",
+  );
+  assert.equal(spawner.isSpawned(1, 2), true, "cooldown still holds briefly");
+
+  // Advancing past the cooldown must allow a fresh spawn attempt.
+  const spawner2 = createTelegramInstanceSpawner({
+    piCommand: "/nonexistent/pi-binary-that-does-not-exist",
+    getNowMs: () => 2000,
+    getLogDir: () => "/tmp",
+  });
+  assert.equal((await spawner2.spawnForThread({ chatId: 1, threadId: 2 })).ok, true);
+  spawner.stop();
+  spawner2.stop();
+});

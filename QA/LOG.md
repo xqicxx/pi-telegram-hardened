@@ -100,3 +100,17 @@
 - npm run typecheck / pack:check 通过（104 文件，842KB）
 - release 目录全量：1730 tests / 1727 pass / 0 fail
 - 推送 GitHub：B3 commit (319de0f)
+
+## 会话 R3 (2026-09-03 ~01:10)
+
+### B11 (新发现, 已修复)
+- **根因**: instance-spawner 的 `child.on("error")` 只 recordRuntimeEvent，不清理 instances Map。
+  spawn 失败(如 pi 不在 PATH, ENOENT)不触发 "exit" 事件 → 实例永远 "starting" → isSpawned 永久 true + 占并发额度。
+- **修复**: error handler 复用 B1 的清理路径（移入 recentExits + 冷却），加 children.get 守卫。
+- **回归测试**: instance-spawner.test.ts "releases a thread when spawn fails outright" (7/7)
+- 全量: 1731 tests / 1728 pass / 0 fail
+
+### 验证结论
+- RPC 模式执行扩展命令确认（rpc.md: extension commands execute immediately）
+- 生产 429 根因链完整：Surge 卡 → create 响应丢失(ambiguous) → B4 TTL 误丢弃 → 重试新建 → 连环建主题 → 429
+  → B4 + probe 5s + B10 三个修复已堵死此链

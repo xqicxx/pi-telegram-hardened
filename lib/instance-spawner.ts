@@ -241,6 +241,23 @@ export function createTelegramInstanceSpawner(
           chatId,
           threadId,
         });
+        // A failed spawn never emits "exit"; release the slot and start the
+        // respawn cooldown so a bad executable cannot wedge the thread forever
+        // as a phantom "starting" instance (B11).
+        if (children.get(key) === child) {
+          const current = instances.get(key);
+          if (current) {
+            current.status = "exited";
+            current.exitedAtMs = getNowMs();
+            current.exitCode = null;
+            instances.delete(key);
+            recentExits.set(key, {
+              record: current,
+              exitedAtMs: current.exitedAtMs,
+            });
+          }
+          children.delete(key);
+        }
       });
       child.stdout?.on("data", (chunk: Buffer) => {
         void writeLogFile(chatId, threadId, "out", chunk);
