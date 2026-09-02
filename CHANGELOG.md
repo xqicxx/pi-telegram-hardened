@@ -15,6 +15,7 @@
 - `Hard-Deadline Delivery`: The Telegram API transport cap and follower-provisioning timeout are no longer unref'd, so a stalled proxy/socket is actually bounded even when the process is otherwise idle instead of silently skipping the deadline and hanging the caller forever.
 - `Stray-Entity Hardening`: The activity HTML balancer now preserves a lone `<` that does not start a real tag as escaped literal text instead of silently dropping the token, so no reasoning text can be lost at the Telegram parse boundary.
 - `Spawn-Failure Hygiene`: A background instance whose process fails to launch (for example `pi` missing from PATH) now releases its thread and concurrency slot through the same exit-cooldown path instead of leaving a phantom `starting` instance that blocks the thread forever.
+- `Follower Pin Routing`: The bus follower API allowlist now includes `pinChatMessage`/`unpinChatMessage`, so Pinned Working Views work through follower transport (previously the bus rejected the call).
 
 ## 0.42.2: Telegram Comment Membrane
 

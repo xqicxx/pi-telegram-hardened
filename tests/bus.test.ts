@@ -2468,3 +2468,37 @@ test("Bus follower registry returns defensive copies", () => {
     threadId: 2,
   });
 });
+
+test("Bus follower API allowlist permits scoped own-thread pin/unpin (B12)", () => {
+  const follower = {
+    instanceId: "inst-a",
+    connectedAtMs: 1000,
+    lastHeartbeatMs: 1000,
+    target: { chatId: 10, threadId: 42 },
+  };
+  assert.equal(
+    isTelegramFollowerApiCallAllowed({
+      follower,
+      method: "call",
+      args: ["pinChatMessage", { chat_id: 10, message_thread_id: 42, message_id: 7 }],
+    }),
+    true,
+  );
+  assert.equal(
+    isTelegramFollowerApiCallAllowed({
+      follower,
+      method: "call",
+      args: ["unpinChatMessage", { chat_id: 10, message_thread_id: 42, message_id: 7 }],
+    }),
+    true,
+  );
+  // Cross-chat pinning is still rejected by the scope fence.
+  assert.equal(
+    isTelegramFollowerApiCallAllowed({
+      follower,
+      method: "call",
+      args: ["pinChatMessage", { chat_id: 99, message_id: 7 }],
+    }),
+    false,
+  );
+});

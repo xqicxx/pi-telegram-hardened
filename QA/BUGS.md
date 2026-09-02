@@ -13,6 +13,7 @@
 | B9 | 低 | delivery `pinned` 标志按 options.pin 硬编码，不反映实际是否 pin 成功 | ✅ 已修复 |
 | B10 | 高 | API 硬超时与 provisioning 超时的 `timer.unref()` 在进程空闲时不触发 → 超时形同虚设，重新打开卡死窗口 | ✅ 已修复+测试 |
 | B11 | 中 | spawn 失败(ENOENT)只记日志不清理 → 僵尸 starting 实例永久卡线程+占并发 | ✅ 已修复+测试 |
+| B12 | 中 | bus 方法白名单缺 pinChatMessage/unpinChatMessage → follower 场景 pin 被拒 | ✅ 已修复+双测试 |
 
 ## 详细记录
 

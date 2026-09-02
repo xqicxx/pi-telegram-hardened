@@ -459,6 +459,8 @@ export function isTelegramFollowerApiCallAllowed(input: {
     "editForumTopic",
     "editMessageReplyMarkup",
     "editMessageText",
+    "pinChatMessage",
+    "unpinChatMessage",
     "sendChatAction",
     "sendMessage",
     "sendMessageDraft",

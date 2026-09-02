@@ -476,3 +476,47 @@ test("follower editMessageText rethrows non-unmodified failures", async () => {
     /message text is empty/,
   );
 });
+
+test("Bus-aware API runtime routes follower pin/unpin through the leader with thread target (B12)", async () => {
+  const directCalls: unknown[] = [];
+  const busCalls: unknown[] = [];
+  const runtime = createTelegramBusAwareApiRuntime({
+    directRuntime: createDirectRuntime(directCalls),
+    ownsDirect: () => false,
+    getDefaultTarget: () => ({ chatId: 1, threadId: 5 }),
+    callFollowerApi: async (method, args) => {
+      busCalls.push({ method, args });
+      return true;
+    },
+  });
+
+  assert.equal(await runtime.pinChatMessage(1, 9, {}), true);
+  assert.equal(await runtime.unpinChatMessage(1, 9), true);
+  // Explicit thread option overrides the default thread target.
+  assert.equal(
+    await runtime.pinChatMessage(1, 9, { message_thread_id: 99 }),
+    true,
+  );
+
+  assert.deepEqual(directCalls, []);
+  assert.deepEqual(busCalls, [
+    {
+      method: "call",
+      args: [
+        "pinChatMessage",
+        { chat_id: 1, message_id: 9, message_thread_id: 5 },
+      ],
+    },
+    {
+      method: "call",
+      args: ["unpinChatMessage", { chat_id: 1, message_id: 9, message_thread_id: 5 }],
+    },
+    {
+      method: "call",
+      args: [
+        "pinChatMessage",
+        { chat_id: 1, message_id: 9, message_thread_id: 99 },
+      ],
+    },
+  ]);
+});

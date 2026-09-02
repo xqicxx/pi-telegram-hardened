@@ -114,3 +114,14 @@
 - RPC 模式执行扩展命令确认（rpc.md: extension commands execute immediately）
 - 生产 429 根因链完整：Surge 卡 → create 响应丢失(ambiguous) → B4 TTL 误丢弃 → 重试新建 → 连环建主题 → 429
   → B4 + probe 5s + B10 三个修复已堵死此链
+
+## 会话 R4 (2026-09-03 ~01:20)
+
+### B12 (新发现, 已修复)
+- **根因**: lib/bus.ts 的 follower API 允许列表缺 pinChatMessage/unpinChatMessage。
+  follower 场景 delivery pinMessage → bus-api callFollowerApi("call",["pinChatMessage",...]) → bus 拒绝。
+  **意味着 Pinned Working Views 在 follower 传输下完全失效**（leader 直接传输下才可用）。
+- **修复**: 允许列表补两个方法（generic 分支 + isTargetScoped 校验，跨 chat 仍拒绝）
+- **双测试**: bus-api.test.ts "routes follower pin/unpin through the leader"（含默认线程目标注入）；
+  bus.test.ts "allowlist permits scoped own-thread pin/unpin"（含跨 chat 拒绝）
+- 全量: 1733 tests / 1730 pass / 0 fail
