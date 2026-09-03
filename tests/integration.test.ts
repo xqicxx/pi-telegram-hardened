@@ -2326,6 +2326,13 @@ test("Lost handoff ACK cannot cancel accepted cross-process authority", async ()
     assert.equal(result.cancelled, false);
     assert.equal(cancellationAttempts, 1);
     assert.equal(donorQueue.getQueuedItems().length, 1);
+    // The recipient child writes its owner identity into the shared journal
+    // across a process boundary; wait for that write to become visible instead
+    // of racing the filesystem flush (flaky on loaded macOS/Windows CI).
+    await waitForCondition(
+      () => journal.read().entries[0]?.queueOwner?.processId === ready.pid,
+      5_000,
+    );
     assert.equal(journal.read().entries[0]?.queueOwner?.processId, ready.pid);
     assert.equal(journal.read().entries[0]?.queueHandoff, undefined);
 
