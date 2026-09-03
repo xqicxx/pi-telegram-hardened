@@ -24,6 +24,7 @@ const TELEGRAM_THREAD_CAPABILITY_DISABLED_CONFIRMATION_PROBES = 2;
 const TELEGRAM_GET_UPDATES_CONFLICT_FAST_RETRY_LIMIT = 3;
 const TELEGRAM_GET_UPDATES_CONFLICT_FAST_RETRY_MS = 1_000;
 const TELEGRAM_GET_UPDATES_CONFLICT_SLOW_RETRY_MS = 3_000;
+const TELEGRAM_GET_UPDATES_CONFLICT_ESCALATION_LIMIT = 10;
 const TELEGRAM_POLLING_RETRY_MS = 3_000;
 export const TELEGRAM_GET_UPDATES_GRACE_MS = 10_000;
 
@@ -1320,6 +1321,7 @@ export interface TelegramPollLoopDeps<
     currentUpdateId?: number,
   ) => void;
   onSuccessfulResponse?: (updateCount: number) => void;
+  onPersistentConflict?: (consecutiveConflicts: number) => boolean | void;
 }
 
 export interface TelegramPollLoopRunnerDeps<
@@ -1349,6 +1351,7 @@ export interface TelegramPollLoopRunnerDeps<
     currentUpdateId?: number,
   ) => void;
   onSuccessfulResponse?: (updateCount: number) => void;
+  onPersistentConflict?: (consecutiveConflicts: number) => boolean | void;
 }
 
 export function sleepTelegramPollingRetry(
@@ -1411,6 +1414,7 @@ export function createTelegramPollLoopRunner<
       sleep,
       onPhaseChange: deps.onPhaseChange,
       onSuccessfulResponse: deps.onSuccessfulResponse,
+      onPersistentConflict: deps.onPersistentConflict,
       recordRuntimeEvent: deps.recordRuntimeEvent,
     });
 }
@@ -1611,6 +1615,14 @@ export async function runTelegramPollLoop<
       });
       if (isTelegramGetUpdatesConflictError(error)) {
         consecutiveGetUpdatesConflicts += 1;
+        // ponytail: local patch, drop when upstream fixes it — loser stands down instead of hammering 409 forever.
+        if (
+          consecutiveGetUpdatesConflicts >=
+            TELEGRAM_GET_UPDATES_CONFLICT_ESCALATION_LIMIT &&
+          deps.onPersistentConflict?.(consecutiveGetUpdatesConflicts) === true
+        ) {
+          return;
+        }
         await deps.sleep(
           consecutiveGetUpdatesConflicts <
             TELEGRAM_GET_UPDATES_CONFLICT_FAST_RETRY_LIMIT

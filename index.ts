@@ -1077,6 +1077,21 @@ export default function (pi: Pi.ExtensionAPI) {
       stopTypingLoop: typing.stop,
       updateStatus,
       onPollingStateChange: runtimeDiagnostics.scheduleSnapshotPersist,
+      // ponytail: local patch, drop when upstream fixes it — stand down on
+      // persistent 409 so a losing instance stops hammering someone else's stream.
+      onPersistentConflict: (consecutiveConflicts) => {
+        const ctx = telegramSessionContextStore.get();
+        if (ctx && lockRuntime.owns(ctx)) return false;
+        if (ctx) {
+          updateStatus(ctx, "Telegram 已由另一实例接管，本实例停止轮询。");
+        }
+        recordRuntimeEvent(
+          "polling",
+          "Persistent getUpdates conflict; standing down.",
+          { phase: "takeover-stand-down", consecutiveConflicts },
+        );
+        return true;
+      },
       recordRuntimeEvent,
     });
   const authorizeFollowerApiCall = Bus.createTelegramFollowerApiCallAuthorizer({
