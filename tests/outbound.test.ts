@@ -16,6 +16,7 @@ test.beforeEach(() => {
 });
 
 import {
+  clearTelegramVoiceSynthesisProviders,
   createTelegramButtonActionStore,
   createTelegramButtonPromptTurn,
   createTelegramOutboundReplyArtifactSender,
@@ -23,13 +24,13 @@ import {
   createTelegramOutboundTextPreviewRuntime,
   createTelegramOutboundTextReplyRuntime,
   createTelegramVoiceReplySender,
+  generateTelegramVoiceReplyFile,
+  getTelegramVoiceSynthesisProviders,
   handleTelegramButtonCallbackQuery,
+  hasTelegramVoiceSynthesisProvider,
   planTelegramButtonReply,
   planTelegramVoiceReply,
   registerTelegramVoiceSynthesisProvider,
-  getTelegramVoiceSynthesisProviders,
-  hasTelegramVoiceSynthesisProvider,
-  clearTelegramVoiceSynthesisProviders,
   stripTelegramCommentMarkupForPreview,
   stripTelegramVoiceMarkupForPreview,
 } from "../lib/outbound.ts";
@@ -1272,6 +1273,57 @@ test("Voice reply sender only passes replyMarkup to first successful voice reply
   );
   disposeFail();
   disposeSuccess();
+});
+
+test("Outbound voice single-step array template produces the configured output path", async () => {
+  const execCalls: Array<{ command: string; args: string[]; stdin?: string }> =
+    [];
+  const file = await generateTelegramVoiceReplyFile("hello", {
+    handler: {
+      type: "voice",
+      template: ["/opt/bin/tts.sh {mp3} {ogg}"],
+      output: "ogg",
+    },
+    tempDir: tmpdir(),
+    cwd: tmpdir(),
+    execCommand: async (command, args, options) => {
+      execCalls.push({ command, args, stdin: options?.stdin });
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(args[1]!, "ogg-data");
+      return { stdout: "", stderr: "", code: 0, killed: false };
+    },
+  });
+  assert.ok(file);
+  assert.ok(file.endsWith(".ogg"));
+  assert.equal(execCalls.length, 1);
+  assert.equal(execCalls[0]!.command, "/opt/bin/tts.sh");
+  assert.equal(execCalls[0]!.args.length, 2);
+  assert.equal(execCalls[0]!.stdin, "hello");
+  const { unlinkSync } = await import("node:fs");
+  if (file) unlinkSync(file);
+});
+
+test("Outbound voice composition surfaces step failures instead of swallowing them", async () => {
+  await assert.rejects(
+    async () =>
+      await generateTelegramVoiceReplyFile("hello", {
+        handler: {
+          type: "voice",
+          // Array template = pipeline steps; every step fails here.
+          template: ["/bin/false", "{mp3}"],
+          output: "ogg",
+        },
+        tempDir: tmpdir(),
+        cwd: tmpdir(),
+        execCommand: async (_command, _args, _options) => ({
+          stdout: "",
+          stderr: "boom",
+          code: 1,
+          killed: false,
+        }),
+      }),
+    /Outbound voice pipeline produced no output: step 1: .*code 1/s,
+  );
 });
 
 test("Voice reply sender throws when every handler fails", async () => {

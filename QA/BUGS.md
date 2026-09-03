@@ -16,6 +16,7 @@
 | B12 | 中 | bus 方法白名单缺 pinChatMessage/unpinChatMessage → follower 场景 pin 被拒 | ✅ 已修复+双测试 |
 | B13 | 中 | createTelegramFollowerApiCallAuthorizer 残留 `[bus-debug]` console.error → 每个 follower API 调用都刷 stderr，泄露 args | ✅ 已移除（R5） |
 | B14 | 低 | lib/ 遗留 delivery.ts.bak-pinfix-* 备份文件 → `files:["lib/"]` 会把它打进 npm 包 | ✅ 已删除 + 不变量守卫（R5） |
+| B15 | 高 | outbound voice 组合步骤失败被静默吞掉（`stdout=""`），只报聚合错误，无法诊断哪个步骤失败 | ✅ 已修复：步骤失败细节汇入 pipeline 错误（R5） |
 
 ## 详细记录
 

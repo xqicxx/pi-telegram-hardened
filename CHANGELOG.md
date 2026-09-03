@@ -18,6 +18,7 @@
 - `Follower Pin Routing`: The bus follower API allowlist now includes `pinChatMessage`/`unpinChatMessage`, so Pinned Working Views work through follower transport (previously the bus rejected the call).
 - `Stale-Handle Pin Cleanup`: A working view handle whose runtime generation changed (transport reconnect, profile switch) is now unpinned and deleted best-effort via `deleteViewStale` instead of failing with `stale-handle` and leaking a pinned card; skips the generation fence because the concrete Telegram message ids stay valid.
 - `Pack Hygiene`: Removes a leftover `[bus-debug]` stderr log from the follower API authorizer and guards against stray `.bak` artifacts ever shipping in the npm tarball.
+- `Voice Pipeline Diagnostics`: When an outbound voice composition step fails, the failure (label, exit code, stderr) is now surfaced in the pipeline error instead of being silently swallowed, so a broken voice template reports exactly which step failed and why.
 
 ## 0.42.2: Telegram Comment Membrane
 

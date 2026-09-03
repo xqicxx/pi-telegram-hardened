@@ -154,3 +154,14 @@
 - 同步: release/ + 安装包 ~/.pi/agent/npm/node_modules/@llblab/pi-telegram（bus.ts、delivery.ts、tests、CHANGELOG、BUGS）
 - CHANGELOG 0.42.3-pre 补 3 条: Stale-Handle Pin Cleanup / Pack Hygiene（+Follower Pin Routing 已在 R4）
 - 桌面 Excel: pi-telegram-迭代记录.xlsx（问题/原因/方案/验证 全轮次）
+
+### R5b: 语音 provider 故障修复（用户语音回复失败）
+- **现象**: "Failed to send voice reply: every voice synthesis provider failed"（4 次，11:16-11:46）
+- **根因（真 bug）**: `~/.pi/agent/telegram.json` 的 outbound voice handler 模板格式错误。
+  用户写成 `"template": ["tts.sh", "{mp3}", "{ogg}"]`（按 inbound 的"命令+参数"直觉），
+  但 outbound voice 的数组 template 是**管道命令序列**（每元素一条完整命令行，docs/voice.md）。
+  桥把它当 3 步管道：①单独跑 tts.sh（无参报错）②把 mp3 路径当命令执行（ENOENT）③把 ogg 路径当命令执行（ENOENT），全部静默失败。
+- **修复**: ①配置改为单元素完整命令行 `["/Users/cx/.pi/scripts/voice/tts.sh {mp3} {ogg}"]`（telegram.json，进程内复现 6.5KB ogg 成功）
+  ②B15：组合步骤失败细节不再吞掉，汇入 "Outbound voice pipeline produced no output: step N: ..." 错误（2 个新测试）
+- **验证**: 全量 1739 tests / 1736 pass / 0 fail；typecheck 干净；真实路径 vtest 生成 ogg 成功
+- **生效**: 配置+代码已写盘，运行中桥需下次重启加载（与 R5 同批）

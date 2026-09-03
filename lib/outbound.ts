@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -479,6 +480,7 @@ async function generateTelegramVoiceReplyFileWithHandler(
   if (steps.length > 0) {
     const startedAt = Date.now();
     let stdout = text;
+    const stepFailures: string[] = [];
     for (const [index, step] of steps.entries()) {
       try {
         const result = await runVoiceReplyCommand(
@@ -499,10 +501,21 @@ async function generateTelegramVoiceReplyFileWithHandler(
         stdout = result.stdout;
       } catch (error) {
         if (typeof step === "object" && step.failure === "root") throw error;
+        stepFailures.push(
+          `step ${index + 1}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
         stdout = "";
       }
     }
-    return getVoiceReplyOutputPath(options.handler, values, stdout);
+    const outputPath = getVoiceReplyOutputPath(options.handler, values, stdout);
+    if (stepFailures.length > 0 && !existsSync(outputPath)) {
+      throw new Error(
+        `Outbound voice pipeline produced no output: ${stepFailures.join("; ")}`,
+      );
+    }
+    return outputPath;
   }
   const result = await runVoiceReplyCommand(
     "Outbound voice template",
