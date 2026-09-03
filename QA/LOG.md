@@ -125,3 +125,32 @@
 - **双测试**: bus-api.test.ts "routes follower pin/unpin through the leader"（含默认线程目标注入）；
   bus.test.ts "allowlist permits scoped own-thread pin/unpin"（含跨 chat 拒绝）
 - 全量: 1733 tests / 1730 pass / 0 fail
+
+## 会话 R5 (2026-09-03 ~11:30)
+
+### 任务
+对比 pi.dev 发布版 vs 原项目(badlogic) vs 本地硬化版 → 明确目标 → 头脑风暴 → 测试找 Bug → 迭代 → 桌面 Excel 记录。
+
+### 现状
+- 基线（workbench = release + 安装包最新）：1733 tests / 1730 pass / 0 fail / 3 skipped；typecheck 干净
+- 发现安装包有 R4 之后未发布的改动：delivery.ts `deleteViewStale`（pin 清理）+ bus.ts `[bus-debug]` 调试残留 + 遗留 .bak 文件
+
+### B13 (中) — bus.ts 调试残留
+- 根因: createTelegramFollowerApiCallAuthorizer 加了 console.error `[bus-debug]`（今天 10:52 调试时加的），每个 follower API 调用都刷 stderr，args 内容可能泄入日志
+- 修复: 还原为 release 干净版（无副作用日志）
+- 验证: diff release/lib/bus.ts 完全一致
+
+### B14 (低) — 打包残留 .bak
+- 根因: lib/delivery.ts.bak-pinfix-20260903-105249 备份文件留在 lib/，package.json `files:["lib/"]` 会打进 npm 包（体积+困惑）
+- 修复: 删除；并在 invariants.test.ts 加"lib 无 .bak/orig/tmp/swp/~/"守卫测试
+- 验证: pack:check 104 文件 843KB 无 .bak
+
+### G1 (高) — deleteViewStale 零测试覆盖
+- 根因: R4 后新功能（transport reconnect 后 stale pinned 卡片 unpin+delete），生产已接线（createTelegramBridgeDeliveryRuntime → createTelegramDeliveryRuntime 含 deleteViewStale），但 tests mock runtime 不实现它 → 新路径从未被测试
+- 修复: delivery.test.ts 加 3 个测试（membrane 回退调用 / 无回退仍 stale-handle / 具体实现 unpin+delete 跨代）
+- 验证: 全量 1737 tests / 1734 pass / 0 fail
+
+### 交付
+- 同步: release/ + 安装包 ~/.pi/agent/npm/node_modules/@llblab/pi-telegram（bus.ts、delivery.ts、tests、CHANGELOG、BUGS）
+- CHANGELOG 0.42.3-pre 补 3 条: Stale-Handle Pin Cleanup / Pack Hygiene（+Follower Pin Routing 已在 R4）
+- 桌面 Excel: pi-telegram-迭代记录.xlsx（问题/原因/方案/验证 全轮次）

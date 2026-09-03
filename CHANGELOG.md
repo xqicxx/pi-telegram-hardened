@@ -16,6 +16,8 @@
 - `Stray-Entity Hardening`: The activity HTML balancer now preserves a lone `<` that does not start a real tag as escaped literal text instead of silently dropping the token, so no reasoning text can be lost at the Telegram parse boundary.
 - `Spawn-Failure Hygiene`: A background instance whose process fails to launch (for example `pi` missing from PATH) now releases its thread and concurrency slot through the same exit-cooldown path instead of leaving a phantom `starting` instance that blocks the thread forever.
 - `Follower Pin Routing`: The bus follower API allowlist now includes `pinChatMessage`/`unpinChatMessage`, so Pinned Working Views work through follower transport (previously the bus rejected the call).
+- `Stale-Handle Pin Cleanup`: A working view handle whose runtime generation changed (transport reconnect, profile switch) is now unpinned and deleted best-effort via `deleteViewStale` instead of failing with `stale-handle` and leaking a pinned card; skips the generation fence because the concrete Telegram message ids stay valid.
+- `Pack Hygiene`: Removes a leftover `[bus-debug]` stderr log from the follower API authorizer and guards against stray `.bak` artifacts ever shipping in the npm tarball.
 
 ## 0.42.2: Telegram Comment Membrane
 

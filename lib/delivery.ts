@@ -99,6 +99,17 @@ export interface TelegramDeliveryRuntime {
   deleteView: (
     handle: TelegramDeliveryHandle,
   ) => Promise<TelegramDeliveryResult<void>>;
+  /**
+   * Best-effort cleanup for a handle whose runtime generation changed after it
+   * was created (e.g. transport reconnect). The handle carries the concrete
+   * target/messageIds/pinned data, and those Telegram message IDs remain valid
+   * across generations, so unpin + delete still apply. Skips the generation
+   * fence; never recreates or edits. Falls back to no-op failure only when the
+   * underlying transport itself is unavailable.
+   */
+  deleteViewStale?: (
+    handle: TelegramDeliveryHandle,
+  ) => Promise<TelegramDeliveryResult<void>>;
   sendChatAction: (
     action: TelegramDeliveryChatAction,
     scope: TelegramDeliveryScope,
@@ -713,6 +724,43 @@ export function createTelegramDeliveryRuntime(
         }
       });
     },
+    async deleteViewStale(handle) {
+      if (!active) return inactive();
+      const target = handle.target;
+      const authorized = resolveTelegramDeliveryTarget(
+        { kind: "target", target },
+        deps,
+      );
+      if (!authorized.ok) {
+        return failure(authorized.reason, authorized.message);
+      }
+      return runForTarget(authorized.value, async () => {
+        if (!active) return inactive();
+        try {
+          if (handle.pinned && deps.unpinMessage) {
+            try {
+              await deps.unpinMessage(
+                authorized.value,
+                handle.messageIds[0]!,
+              );
+            } catch {
+              // Deleting a pinned message also clears its pin; keep going.
+            }
+            if (!active) return inactive();
+          }
+          for (const messageId of handle.messageIds) {
+            if (!active) return inactive();
+            await deps.deleteMessage(authorized.value, messageId);
+            if (!active) return inactive();
+          }
+          return { ok: true, value: undefined };
+        } catch (error) {
+          return active
+            ? transportFailure("delete", error, authorized.value)
+            : inactive();
+        }
+      });
+    },
     async sendChatAction(action, scope) {
       if (!active) return inactive();
       const resolved = resolveTelegramDeliveryTarget(scope, deps);
@@ -935,6 +983,14 @@ export async function deleteTelegramView(
 ): Promise<TelegramDeliveryResult<void>> {
   return runDeliveryOperation((runtime) => {
     if (runtime.generation !== handle.generation) {
+      // The handle's runtime generation changed after it was created (transport
+      // reconnect, profile switch, etc.), but the handle still carries the
+      // concrete target/messageIds/pinned data. Those Telegram message IDs
+      // remain valid across generations, so fall back to a best-effort
+      // unpin+delete instead of silently leaving a pinned working card behind.
+      if (typeof runtime.deleteViewStale === "function") {
+        return runtime.deleteViewStale(handle);
+      }
       return Promise.resolve(
         failure(
           "stale-handle",

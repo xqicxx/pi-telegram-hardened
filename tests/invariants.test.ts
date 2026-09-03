@@ -211,6 +211,19 @@ test("Domain test filenames mirror their owning lib domain", () => {
   assert.deepEqual(unmirrored, []);
 });
 
+test("lib ships no stray backup or editor artifacts", () => {
+  const stray = readdirSync(join(PROJECT_ROOT, "lib"))
+    .filter(
+      (name) =>
+        /\.(bak|orig|tmp|swp)$/.test(name) || name.endsWith("~"),
+    );
+  assert.deepEqual(
+    stray,
+    [],
+    "npm ships lib/ verbatim; backup artifacts must never be left behind",
+  );
+});
+
 test("Project source imports stay acyclic", () => {
   const graph = buildProjectImportGraph(getProjectSourceFiles());
   const cycles = findImportCycles(graph);

@@ -118,6 +118,66 @@ test("Delivery API fences handles from older runtime generations", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("Delivery delete of a stale handle falls back to runtime.deleteViewStale", async () => {
+  const staleCalls: TelegramDeliveryHandle[] = [];
+  const runtime = createRuntime("new");
+  runtime.deleteViewStale = async (staleHandle) => {
+    staleCalls.push(staleHandle);
+    return { ok: true, value: undefined };
+  };
+  bindTelegramDeliveryRuntime(runtime);
+  const stale: TelegramDeliveryHandle = {
+    target,
+    messageIds: [11, 12],
+    generation: "old",
+    pinned: true,
+  };
+  const result = await deleteTelegramView(stale);
+  assert.equal(result.ok, true);
+  assert.equal(staleCalls.length, 1);
+  assert.deepEqual(staleCalls[0], stale);
+});
+
+test("Delivery delete of a stale handle without deleteViewStale still fails", async () => {
+  bindTelegramDeliveryRuntime(createRuntime("new"));
+  const result = await deleteTelegramView({
+    target,
+    messageIds: [11],
+    generation: "old",
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "stale-handle");
+});
+
+test("Concrete delivery runtime deleteViewStale unpins and deletes by handle target across generations", async () => {
+  const { runtime, events } = createConcreteRuntimeHarness({
+    async unpinMessage(deliveryTarget, messageId) {
+      events.push({ type: "unpin", deliveryTarget, messageId });
+    },
+  });
+  bindTelegramDeliveryRuntime(runtime);
+  const stale: TelegramDeliveryHandle = {
+    target,
+    messageIds: [21, 22],
+    generation: "older-generation",
+    pinned: true,
+  };
+  const result = await deleteTelegramView(stale);
+  assert.equal(result.ok, true);
+  const unpins = events.filter((e) => e.type === "unpin");
+  assert.equal(unpins.length, 1);
+  assert.deepEqual(unpins[0], {
+    type: "unpin",
+    deliveryTarget: target,
+    messageId: 21,
+  });
+  const deletes = events.filter((e) => e.type === "delete");
+  assert.deepEqual(
+    deletes.map((e) => e.messageId),
+    [21, 22],
+  );
+});
+
 test("A stale runtime disposer cannot clear its replacement", async () => {
   const firstCalls: string[] = [];
   const secondCalls: string[] = [];

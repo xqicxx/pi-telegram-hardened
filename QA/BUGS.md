@@ -14,6 +14,8 @@
 | B10 | 高 | API 硬超时与 provisioning 超时的 `timer.unref()` 在进程空闲时不触发 → 超时形同虚设，重新打开卡死窗口 | ✅ 已修复+测试 |
 | B11 | 中 | spawn 失败(ENOENT)只记日志不清理 → 僵尸 starting 实例永久卡线程+占并发 | ✅ 已修复+测试 |
 | B12 | 中 | bus 方法白名单缺 pinChatMessage/unpinChatMessage → follower 场景 pin 被拒 | ✅ 已修复+双测试 |
+| B13 | 中 | createTelegramFollowerApiCallAuthorizer 残留 `[bus-debug]` console.error → 每个 follower API 调用都刷 stderr，泄露 args | ✅ 已移除（R5） |
+| B14 | 低 | lib/ 遗留 delivery.ts.bak-pinfix-* 备份文件 → `files:["lib/"]` 会把它打进 npm 包 | ✅ 已删除 + 不变量守卫（R5） |
 
 ## 详细记录
 
