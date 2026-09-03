@@ -2169,6 +2169,9 @@ test("Queued control handoff reconstructs one local execution in the recipient p
   }
 }, 10_000);
 
+// Cross-process spawn + journal flush costs ~5.3s alone; under parallel load
+// (concurrency=4, 8-core CI) it exceeds the 10s default. 20s keeps the
+// regression meaningful without masking a real hang (R7).
 test("Lost handoff ACK cannot cancel accepted cross-process authority", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-telegram-handoff-ack-loss-"));
   const journalPath = join(dir, "inbox.json");
@@ -2358,7 +2361,7 @@ test("Lost handoff ACK cannot cancel accepted cross-process authority", async ()
     donorLock.release();
     await rm(dir, { recursive: true, force: true });
   }
-}, 10_000);
+}, 20_000);
 
 test("Live owner remains fenced when replacement races dead-owner recovery", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-telegram-live-owner-race-"));

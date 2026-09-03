@@ -523,6 +523,16 @@ export default function (pi: Pi.ExtensionAPI) {
           scope: target?.threadId === undefined ? "aggregate" : "thread",
         });
       },
+      // P1 dead-thread self-heal: delivery reports the dead target, the
+      // owner marks it stale + persists (debounced by the store itself:
+      // markStaleByTarget returns false when already gone). Next ensure or
+      // provision pass re-creates the binding instead of spamming 400s.
+      notifyStaleTarget: Sync.createDeliveryStaleTargetSelfHeal({
+        load: threadStore.load,
+        markStaleByTarget: threadStore.markStaleByTarget,
+        persist: threadStore.persist,
+        recordEvent: recordRuntimeEvent,
+      }),
     });
   const { sendTextReply, sendMarkdownReply } =
     Outbound.createTelegramOutboundTextReplyRuntime({

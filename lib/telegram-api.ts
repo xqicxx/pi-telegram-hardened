@@ -389,6 +389,8 @@ interface TelegramApiResponse<T> {
 
 export interface TelegramApiCallOptions {
   signal?: AbortSignal;
+  /** Per-call transport deadline override (tests); defaults to the module cap. */
+  timeoutMs?: number;
   maxAttempts?: number;
   retryRateLimit?: boolean;
   retrySafety?: "safe" | "non-idempotent";
@@ -997,7 +999,7 @@ export function setTelegramApiHttpsFetchForTesting(
 
 async function telegramFetch(
   input: string | URL | Request,
-  init: RequestInit = {},
+  init: RequestInit & { timeoutMs?: number } = {},
   family?: TelegramNetworkFamily,
 ): Promise<Response> {
   if (!family) {
@@ -1012,7 +1014,7 @@ async function telegramFetch(
     // (a hung fetch alone does not keep the loop alive).
     const timer = setTimeout(
       () => controller.abort(createTelegramApiCallTimeoutError()),
-      TELEGRAM_API_CALL_TIMEOUT_MS,
+      init.timeoutMs ?? TELEGRAM_API_CALL_TIMEOUT_MS,
     );
     try {
       return await fetch(input, { ...init, signal: controller.signal });
@@ -1259,6 +1261,9 @@ export async function callTelegram<TResponse>(
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
             signal: options?.signal,
+            ...(options?.timeoutMs !== undefined
+              ? { timeoutMs: options.timeoutMs }
+              : {}),
           },
           family,
         ),

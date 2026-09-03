@@ -21,6 +21,7 @@ import {
   isTelegramApiCommitUnknownError,
   type TelegramBridgeApiRuntime,
 } from "./telegram-api.ts";
+import { isTelegramTopicTargetStaleError } from "./threads.ts";
 
 const TELEGRAM_DELIVERY_RUNTIME_KEY = "__piTelegramDeliveryRuntime__";
 
@@ -175,10 +176,19 @@ export interface TelegramDeliveryRuntimeDeps extends TelegramDeliveryTargetResol
     error: unknown,
     target?: TelegramDeliveryTarget,
   ) => void;
+  /**
+   * Best-effort stale-thread self-heal hook. Called with the request target
+   * when a send/edit/delete fails with a stale-thread API error (deleted /
+   * closed topic). Delivery never provisions or deletes topics itself: the
+   * owner marks the record stale + persists, and the next ensure/provision
+   * pass re-creates the binding. Sync, fire-and-forget; must never throw.
+   */
+  notifyStaleTarget?: (target: TelegramDeliveryTarget) => void;
 }
 
 /** @internal */
-export interface TelegramBridgeDeliveryRuntimeDeps {
+export interface TelegramBridgeDeliveryRuntimeDeps
+  extends Pick<TelegramDeliveryRuntimeDeps, "notifyStaleTarget"> {
   generation: string;
   getTargetPolicyView: () => TelegramDeliveryTargetPolicyView;
   getActiveTurnTarget: () => TelegramDeliveryTarget | undefined;
@@ -509,6 +519,21 @@ export function createTelegramDeliveryRuntime(
     partial?: T,
   ): TelegramDeliveryResult<T> => {
     deps.recordFailure?.(operation, error, target);
+    // P1 dead-thread self-heal: a stale-thread API error (topic deleted or
+    // closed server-side) means every future send to this target will fail
+    // the same way. Notify the owner best-effort so it can mark the record
+    // stale; the next ensure/provision pass re-creates the binding instead of
+    // spamming forever. Never throws: delivery owns no store.
+    if (
+      target?.threadId !== undefined &&
+      isTelegramTopicTargetStaleError(error)
+    ) {
+      try {
+        deps.notifyStaleTarget?.(target);
+      } catch {
+        // Owner hook must never break delivery.
+      }
+    }
     if (error instanceof TelegramDeliveryTransportGenerationError) {
       return inactive();
     }
@@ -896,6 +921,9 @@ export function createTelegramBridgeDeliveryRuntime(
       });
     },
     recordFailure: deps.recordFailure,
+    ...(deps.notifyStaleTarget
+      ? { notifyStaleTarget: deps.notifyStaleTarget }
+      : {}),
   });
 }
 
