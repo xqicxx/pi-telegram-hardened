@@ -33,7 +33,7 @@ import {
 
 // ── 与 whimsical 同款常量 ─────────────────────────────────────────────
 const MIN_MESSAGE_INTERVAL_MS = 10_000; // 每 10s 换一条新消息
-const TICK_MS = 2_000; // spinner 帧间隔（Telegram 编辑节流友好；1s 会触发限流）
+const TICK_MS = 4_000; // spinner 帧间隔（Telegram 单 chat ~1 msg/s；2s 与 reasoning 卡片叠加超限；4s=0.25/s 安全）
 const EDIT_FAIL_BACKOFF_MS = 30_000; // edit 失败后退避，避免触发 Telegram 429
 const EDIT_FAIL_LIMIT = 3; // 连续失败达到该次数，本 turn 停止动画
 const SPINNER = ["◜", "◠", "◝", "◞", "◡", "◟"]; // sleekOrbit

@@ -25,7 +25,7 @@ export const TELEGRAM_ACTIVITY_MESSAGE_MAX_CHARS = 3_900;
 export const TELEGRAM_ACTIVITY_MESSAGE_MAX_TOOLS = 6;
 export const TELEGRAM_REASONING_MESSAGE_MAX_FRAMES = 24;
 export const TELEGRAM_REASONING_BUFFER_MAX_CHARS = 1_200;
-export const TELEGRAM_REASONING_MIN_INTERVAL_MS = 1_200;
+export const TELEGRAM_REASONING_MIN_INTERVAL_MS = 3_000; // Telegram 单 chat ~1 msg/s 限制；1.2s(0.83/s) 与 working 卡片叠加会触发 429. 3s=0.33/s 安全余量
 export const TELEGRAM_TOOL_UPDATE_MAX_ENTRIES = 4;
 
 interface ToolActivity {
