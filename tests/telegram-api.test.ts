@@ -38,6 +38,7 @@ import {
   isTelegramApiCommitUnknownError,
   isTelegramMessageNotModifiedError,
   setTelegramApiHttpsFetchForTesting,
+  TelegramApiCommitUnknownError,
   prepareTelegramTempDir,
   TELEGRAM_FILE_MAX_BYTES,
   type TelegramApiCallOptions,
@@ -1094,6 +1095,78 @@ test("Non-idempotent malformed success becomes commit-unknown", async () => {
       isTelegramApiCommitUnknownError,
     );
   } finally {
+    restoreFetch();
+  }
+});
+
+test("Non-idempotent send retries a provably pre-commit transport failure", async () => {
+  const familySeen: boolean[] = [];
+  let calls = 0;
+  const restoreFetch = setApiTestFetch(async () => {
+    calls += 1;
+    familySeen.push(false);
+    throw Object.assign(new Error("getaddrinfo EAI_AGAIN api.telegram.org"), {
+      code: "EAI_AGAIN",
+    });
+  });
+  const restoreHttpsFetch = setTelegramApiHttpsFetchForTesting(
+    async (_input, _init, family) => {
+      calls += 1;
+      familySeen.push(hasApiTestFamily(family));
+      return createApiJsonResponse("sent");
+    },
+  );
+  try {
+    assert.equal(
+      await callTelegram<string>(
+        "123:abc",
+        "sendMessage",
+        { chat_id: 1, text: "hello" },
+        { retryBaseDelayMs: 1 },
+      ),
+      "sent",
+    );
+    assert.equal(calls, 2);
+    // Attempt 1: auto family; attempt 2: forced IPv4 after the pre-commit failure.
+    assert.deepEqual(familySeen, [false, true]);
+  } finally {
+    restoreHttpsFetch();
+    restoreFetch();
+  }
+});
+
+test("Non-idempotent send rejects with the raw error after exhausted pre-commit retries", async () => {
+  let calls = 0;
+  const restoreFetch = setApiTestFetch(async () => {
+    calls += 1;
+    throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+      code: "ECONNREFUSED",
+    });
+  });
+  const restoreHttpsFetch = setTelegramApiHttpsFetchForTesting(
+    async () => {
+      calls += 1;
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+        code: "ECONNREFUSED",
+      });
+    },
+  );
+  try {
+    await assert.rejects(
+      () =>
+        callTelegram("123:abc", "sendMessage", { chat_id: 1, text: "hello" }, {
+          maxAttempts: 3,
+          retryBaseDelayMs: 1,
+        }),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.name === "Error" &&
+        !(error instanceof TelegramApiCommitUnknownError) &&
+        /ECONNREFUSED/u.test(error.message),
+    );
+    assert.equal(calls, 3);
+  } finally {
+    restoreHttpsFetch();
     restoreFetch();
   }
 });

@@ -890,6 +890,31 @@ function isTelegramTransportFailure(error: unknown): boolean {
   return isTelegramTransportFailure(error.cause);
 }
 
+/**
+ * Failures that provably happened before the HTTP request body was sent to
+ * Telegram: DNS resolution, TCP connect refused, or no route to host. On these
+ * the request cannot have committed, so replaying a non-idempotent send is
+ * safe. Everything ambiguous (ECONNRESET/ETIMEDOUT mid-response, aggregated
+ * multi-address attempts, malformed success, 5xx) stays commit-unknown and is
+ * never replayed.
+ */
+const TELEGRAM_PRE_COMMIT_TRANSPORT_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+]);
+
+function isTelegramPreCommitTransportFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error instanceof AggregateError) return false;
+  const code = getErrorCode(error);
+  if (code !== undefined && TELEGRAM_PRE_COMMIT_TRANSPORT_CODES.has(code)) {
+    return true;
+  }
+  return isTelegramPreCommitTransportFailure(error.cause);
+}
+
 function getTelegramRequestBodyBuffer(
   body: BodyInit | null | undefined,
 ): Buffer | undefined {
@@ -1154,13 +1179,17 @@ async function callTelegramWithRetry<TResponse>(
     else await sleepTelegramRetry(ms, options?.signal);
     throwIfTelegramApiCallAborted(options?.signal);
   };
+  let nextFamily: TelegramNetworkFamily | undefined;
   for (let attempt = 0; ; attempt += 1) {
     throwIfTelegramApiCallAborted(options?.signal);
     try {
       return unwrapTelegramApiResult(
         method,
         await parseTelegramApiResponse<TResponse>(
-          await callTelegramTransportRequest(request, retrySafe),
+          await callTelegramTransportRequest(
+            nextFamily === undefined ? request : () => request(nextFamily),
+            retrySafe,
+          ),
           method,
         ),
       );
@@ -1178,6 +1207,14 @@ async function callTelegramWithRetry<TResponse>(
           await waitBeforeRetry(
             getTelegramRetryDelayMs(error, attempt, retryBaseDelayMs),
           );
+          continue;
+        }
+        if (isTelegramPreCommitTransportFailure(error)) {
+          if (attempt >= maxAttempts - 1) throw error;
+          await waitBeforeRetry(
+            getTelegramRetryDelayMs(error, attempt, retryBaseDelayMs),
+          );
+          nextFamily = 4;
           continue;
         }
         if (
