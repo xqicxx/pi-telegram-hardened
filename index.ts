@@ -523,6 +523,16 @@ export default function (pi: Pi.ExtensionAPI) {
           scope: target?.threadId === undefined ? "aggregate" : "thread",
         });
       },
+      // P1 dead-thread self-heal: delivery reports the dead target, the
+      // owner marks it stale + persists (debounced by the store itself:
+      // markStaleByTarget returns false when already gone). Next ensure or
+      // provision pass re-creates the binding instead of spamming 400s.
+      notifyStaleTarget: Sync.createDeliveryStaleTargetSelfHeal({
+        load: threadStore.load,
+        markStaleByTarget: threadStore.markStaleByTarget,
+        persist: threadStore.persist,
+        recordEvent: recordRuntimeEvent,
+      }),
     });
   const { sendTextReply, sendMarkdownReply } =
     Outbound.createTelegramOutboundTextReplyRuntime({
@@ -1079,19 +1089,12 @@ export default function (pi: Pi.ExtensionAPI) {
       onPollingStateChange: runtimeDiagnostics.scheduleSnapshotPersist,
       // ponytail: local patch, drop when upstream fixes it — stand down on
       // persistent 409 so a losing instance stops hammering someone else's stream.
-      onPersistentConflict: (consecutiveConflicts) => {
-        const ctx = telegramSessionContextStore.get();
-        if (ctx && lockRuntime.owns(ctx)) return false;
-        if (ctx) {
-          updateStatus(ctx, "Telegram 已由另一实例接管，本实例停止轮询。");
-        }
-        recordRuntimeEvent(
-          "polling",
-          "Persistent getUpdates conflict; standing down.",
-          { phase: "takeover-stand-down", consecutiveConflicts },
-        );
-        return true;
-      },
+      onPersistentConflict: Polling.createTelegramPersistentConflictStandDown({
+        getContext: telegramSessionContextStore.get,
+        ownsLock: lockRuntime.owns,
+        updateStatus,
+        recordEvent: recordRuntimeEvent,
+      }),
       recordRuntimeEvent,
     });
   const authorizeFollowerApiCall = Bus.createTelegramFollowerApiCallAuthorizer({

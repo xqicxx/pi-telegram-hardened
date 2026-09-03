@@ -181,6 +181,31 @@ test("Concrete delivery runtime deleteViewStale unpins and deletes by handle tar
   );
 });
 
+test("Concrete delivery runtime notifies stale target on thread-not-found send failure (P1 self-heal)", async () => {
+  const staleTargets: Array<{ chatId: number; threadId?: number }> = [];
+  const failures: string[] = [];
+  const { runtime } = createConcreteRuntimeHarness({
+    async sendChunk() {
+      throw Object.assign(
+        new Error("Telegram API sendMessage failed: HTTP 400: message thread not found"),
+        { status: 400 },
+      );
+    },
+    recordFailure: (operation) => {
+      failures.push(operation);
+    },
+    notifyStaleTarget: (staleTarget) => {
+      staleTargets.push(staleTarget);
+    },
+  });
+  const result = await runtime.sendView({ text: "hello" }, { scope: { kind: "instance" } });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.reason, "transport-failed");
+  assert.deepEqual(failures, ["send"]);
+  assert.deepEqual(staleTargets, [target]);
+});
+
 test("Concrete delivery runtime deleteViewStale tolerates an empty message id list", async () => {
   const { runtime, events } = createConcreteRuntimeHarness({
     async unpinMessage(deliveryTarget, messageId) {

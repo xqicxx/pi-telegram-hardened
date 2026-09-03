@@ -1627,6 +1627,39 @@ test("Bus leader rejects generationless registration and disconnect envelopes", 
   assert.equal(registry.get("inst-a")?.registrationGeneration, "inst-a:1");
 });
 
+test("Bus leader records an event when follower provisioning fails (P4 visibility)", async () => {
+  const registry = createTelegramBusFollowerRegistry();
+  const events: Array<{ category: string; details?: Record<string, unknown> }> = [];
+  const handleEnvelope = createRawTelegramBusLeaderEnvelopeHandler({
+    followerRegistry: registry,
+    protocolIdentity: TEST_BUS_PROTOCOL_IDENTITY,
+    provisionFollowerTarget: () => {
+      throw new Error("Telegram API createForumTopic failed: HTTP 429");
+    },
+    recordRuntimeEvent: (category, _error, details) => {
+      events.push({ category, details });
+    },
+  });
+  const response = await handleEnvelope({
+    kind: "follower.register",
+    requestId: "inst-429:1",
+    registration: {
+      instanceId: "inst-429",
+      profileKey: "manual:inst-429",
+      connectedAtMs: 1000,
+      registrationGeneration: "inst-429:1",
+      protocol: TEST_BUS_PROTOCOL_IDENTITY,
+    },
+  });
+  assert.equal(response.kind, "bus.ack");
+  if (response.kind !== "bus.ack") return;
+  assert.equal(response.ok, false);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.category, "bus");
+  assert.equal(events[0]!.details?.phase, "follower-register-provision-failed");
+  assert.equal(events[0]!.details?.instanceId, "inst-429");
+});
+
 test("Bus leader serializes disconnect cleanup before cross-session registration", async () => {
   const registry = createTelegramBusFollowerRegistry();
   registry.register({

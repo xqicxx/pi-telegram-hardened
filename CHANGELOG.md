@@ -17,6 +17,9 @@
 - `Spawn-Failure Hygiene`: A background instance whose process fails to launch (for example `pi` missing from PATH) now releases its thread and concurrency slot through the same exit-cooldown path instead of leaving a phantom `starting` instance that blocks the thread forever.
 - `Follower Pin Routing`: The bus follower API allowlist now includes `pinChatMessage`/`unpinChatMessage`, so Pinned Working Views work through follower transport (previously the bus rejected the call).
 - `Stale-Handle Pin Cleanup`: A working view handle whose runtime generation changed (transport reconnect, profile switch) is now unpinned and deleted best-effort via `deleteViewStale` instead of failing with `stale-handle` and leaking a pinned card; skips the generation fence because the concrete Telegram message ids stay valid.
+- `Dead-Thread Self-Heal`: Delivery reports stale-thread 400s (deleted topic) via `notifyStaleTarget`; the owner marks the record stale and persists, so the next ensure/provision pass re-creates the binding instead of spamming thread-not-found forever.
+- `Follower Failure Visibility`: Follower provisioning failures (429, timeouts) now emit a structured `follower-register-provision-failed` bus event, so status and diagnostics show why a follower never appeared.
+- `Test Speed`: The API hard-timeout regression accepts a per-call `timeoutMs` override (prod default unchanged), cutting the suite by ~20 s.
 - `Pack Hygiene`: Removes a leftover `[bus-debug]` stderr log from the follower API authorizer and guards against stray `.bak` artifacts ever shipping in the npm tarball.
 - `Voice Pipeline Diagnostics`: When an outbound voice composition step fails, the failure (label, exit code, stderr) is now surfaced in the pipeline error instead of being silently swallowed, so a broken voice template reports exactly which step failed and why.
 

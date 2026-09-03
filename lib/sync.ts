@@ -440,6 +440,49 @@ export async function settleStaleTelegramTopicExecutionFailure<
   return true;
 }
 
+export interface TelegramDeliveryStaleTargetSelfHealDeps {
+  load: () => Promise<void>;
+  markStaleByTarget: (
+    target: TelegramTarget,
+    syncStatus?: "open" | "closed" | "deleted" | "unknown",
+    lastSyncError?: string,
+  ) => boolean;
+  persist: () => Promise<void>;
+  recordEvent?: (
+    category: string,
+    message: unknown,
+    details?: Record<string, unknown>,
+  ) => void;
+}
+
+/**
+ * P1 dead-thread self-heal: delivery reports a dead target (deleted topic
+ * observed via send/edit/delete 400), the owner marks it stale + persists.
+ * Sync, fire-and-forget; the inner async can never throw outward. The store
+ * itself debounces: markStaleByTarget returns false when already gone.
+ */
+export function createDeliveryStaleTargetSelfHeal(
+  deps: TelegramDeliveryStaleTargetSelfHealDeps,
+): (target: TelegramTarget) => void {
+  return function handleDeliveryStaleTarget(target) {
+    void (async function healDeliveryStaleTarget() {
+      try {
+        await deps.load();
+        if (deps.markStaleByTarget(target, "deleted", "Delivery reported stale thread target.")) {
+          await deps.persist();
+          deps.recordEvent?.("bus", "Delivery stale target marked", {
+            phase: "delivery-stale-target-self-heal",
+            chatId: target.chatId,
+            threadId: (target as { threadId?: number }).threadId,
+          });
+        }
+      } catch {
+        // Best-effort only; delivery already recorded the failure.
+      }
+    })();
+  };
+}
+
 export async function recoverStaleTelegramTopicApiError<
   TSyncState extends TelegramSyncState,
 >(

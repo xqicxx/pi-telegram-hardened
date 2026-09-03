@@ -1429,6 +1429,45 @@ export function isTelegramGetUpdatesConflictError(error: unknown): boolean {
   );
 }
 
+export interface TelegramPersistentConflictStandDownDeps<TContext> {
+  getContext: () => TContext | undefined;
+  ownsLock: (ctx: TContext) => boolean;
+  updateStatus: (ctx: TContext, message?: string) => void;
+  takenOverMessage?: string;
+  recordEvent?: (
+    category: string,
+    message: unknown,
+    details?: Record<string, unknown>,
+  ) => void;
+}
+
+/**
+ * Stand-down callback for persistent getUpdates 409 conflicts.
+ * Keeps retrying while we still own the lock, otherwise stops the loop.
+ */
+export function createTelegramPersistentConflictStandDown<TContext>(
+  deps: TelegramPersistentConflictStandDownDeps<TContext>,
+): (consecutiveConflicts: number) => boolean {
+  return function onPersistentConflictStandDown(
+    consecutiveConflicts: number,
+  ): boolean {
+    const ctx = deps.getContext();
+    if (ctx && deps.ownsLock(ctx)) return false;
+    if (ctx) {
+      deps.updateStatus(
+        ctx,
+        deps.takenOverMessage ??
+          "Telegram \u5df2\u7531\u53e6\u4e00\u5b9e\u4f8b\u63a5\u7ba1\uff0c\u672c\u5b9e\u4f8b\u505c\u6b62\u8f6e\u8be2\u3002",
+      );
+    }
+    deps.recordEvent?.("polling", "Persistent getUpdates conflict; standing down.", {
+      phase: "takeover-stand-down",
+      consecutiveConflicts,
+    });
+    return true;
+  };
+}
+
 function reportTelegramPollingPhase(
   deps: TelegramRuntimeEventRecorderPort & {
     onPhaseChange?: (

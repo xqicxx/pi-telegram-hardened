@@ -1570,6 +1570,9 @@ test("API transport hard timeout aborts a stalled call with ETIMEDOUT", async ()
       await callTelegram("123:abc", "getMe", {}, {
         retryBaseDelayMs: 0,
         sleep: async () => {},
+        // Per-call override: exercises the same hard-deadline path without
+        // waiting out the 15s module floor (prod default unchanged).
+        timeoutMs: 200,
       });
       console.log("RESULT:NO_TIMEOUT");
     } catch (error) {
@@ -1593,12 +1596,9 @@ test("API transport hard timeout aborts a stalled call with ETIMEDOUT", async ()
       {
         env: {
           ...process.env,
-          // The transport cap has a 15s floor (Math.max(15_000, ...)), so pick
-          // a value above it to keep the deadline test meaningful.
-          PI_TELEGRAM_API_CALL_TIMEOUT_MS: "20000",
           PI_TELEGRAM_NETWORK_FAMILY: "auto",
         },
-        timeout: 40_000,
+        timeout: 15_000,
       },
       (error, stdout, stderr) => {
         if (error && !stdout.includes("RESULT:")) {

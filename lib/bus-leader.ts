@@ -1199,6 +1199,12 @@ export function createTelegramBusLeaderEnvelopeHandler(deps: {
   ) => Promise<void> | void;
   getCurrentLeaderEpoch?: () => number | string | undefined;
   runFollowerMutation?: TelegramBusFollowerMutationRunner;
+  /** P4: structured failure visibility for provisioning (default: silent). */
+  recordRuntimeEvent?: (
+    category: string,
+    error: unknown,
+    details?: Record<string, unknown>,
+  ) => void;
 }): (
   envelope: TelegramBusEnvelope,
 ) => Promise<TelegramBusEnvelope> | TelegramBusEnvelope {
@@ -1546,6 +1552,19 @@ export function createTelegramBusLeaderEnvelopeHandler(deps: {
               ...(registeredTarget ? { result: registeredTarget } : {}),
             };
           } catch (error) {
+            // P4 follower-failure visibility: provisioning failures (429,
+            // timeouts, stale targets) previously vanished into the bus ack.
+            // Record a structured event so status + diagnostics show why the
+            // follower never appeared, instead of silent no-reply.
+            try {
+              deps.recordRuntimeEvent?.("bus", error, {
+                phase: "follower-register-provision-failed",
+                instanceId: envelope.registration.instanceId,
+                profileKey: envelope.registration.profileKey,
+              });
+            } catch {
+              // Visibility must never break the ack path.
+            }
             return {
               kind: "bus.ack" as const,
               requestId: envelope.requestId,
@@ -2077,6 +2096,7 @@ export function createTelegramBusLeaderRuntime<TContext>(
     onFollowerDisconnected: deps.onFollowerDisconnected,
     getCurrentLeaderEpoch: deps.getCurrentLeaderEpoch,
     runFollowerMutation,
+    recordRuntimeEvent: deps.recordRuntimeEvent,
   });
   const routeQueueHandoffEnvelope = async (
     input: Parameters<TelegramBusLeaderRuntime<TContext>["routeQueueHandoff"]>[0],

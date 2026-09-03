@@ -1,3 +1,10 @@
+/**
+ * Telegram polling takeover stand-down regressions
+ * Zones: telegram transport, polling runtime
+ * Locks the loser-stands-down behavior: persistent getUpdates 409 escalates
+ * to onPersistentConflict instead of retrying forever.
+ */
+
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTelegramPollLoop } from "../lib/polling.ts";
