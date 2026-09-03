@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   mkdir,
   mkdtemp,
@@ -1555,7 +1556,7 @@ test("Telegram API client resolves bot tokens lazily for wrapped calls", async (
 test("API transport hard timeout aborts a stalled call with ETIMEDOUT", async () => {
   const childScript = `
     const { callTelegram } = await import(${JSON.stringify(
-      join(apiTimeoutTestDir, "..", "lib", "telegram-api.ts"),
+      pathToFileURL(join(apiTimeoutTestDir, "..", "lib", "telegram-api.ts")).href,
     )});
     // Simulate a stalled socket: a fetch that never settles on its own but
     // rejects when the transport's deadline signal fires (as real fetch does).
@@ -1614,7 +1615,7 @@ test("API transport hard timeout aborts a stalled call with ETIMEDOUT", async ()
 test("API transport exempts callers that own their own signal", async () => {
   const childScript = `
     const { callTelegram } = await import(${JSON.stringify(
-      join(apiTimeoutTestDir, "..", "lib", "telegram-api.ts"),
+      pathToFileURL(join(apiTimeoutTestDir, "..", "lib", "telegram-api.ts")).href,
     )});
     let sawSignal = false;
     globalThis.fetch = (_input, init) => {

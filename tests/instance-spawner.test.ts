@@ -16,18 +16,37 @@ async function createFakePi(opts: { exitMs: number; mode?: "exit" | "hold" }): P
   dir: string;
 }> {
   const dir = await mkdtemp(join(tmpdir(), "pi-spawner-fake-"));
-  const path = join(dir, "fake-pi.sh");
-  const hold = opts.mode === "hold" ? "while :; do sleep 1; done" : `sleep ${opts.exitMs / 1000}`;
-  await writeFile(
-    path,
-    `#!/bin/bash
-echo "ARGS:$*" >> "${dir}/invocation.txt"
-env | grep TELEGRAM_FOLLOWER >> "${dir}/invocation.txt" || true
-${hold}
-exit 0
-`,
-  );
-  await chmod(path, 0o755);
+  const isWin = process.platform === "win32";
+  const path = join(dir, isWin ? "fake-pi.cmd" : "fake-pi.sh");
+  const invocationPath = join(dir, "invocation.txt");
+  if (isWin) {
+    // Windows: Node's spawn routes .cmd through cmd.exe; use a batch fake that
+    // records argv + TELEGRAM_FOLLOWER_* env and then exits or holds.
+    const hold =
+      opts.mode === "hold"
+        ? ":loop\r\ntimeout /t 1 /nobreak >nul\r\ngoto loop\r\n"
+        : `ping -n ${Math.max(2, Math.ceil(opts.exitMs / 500))} 127.0.0.1 >nul\r\n`;
+    await writeFile(
+      path,
+      `@echo off\r\n` +
+        `echo ARGS:%*>> "${invocationPath}"\r\n` +
+        `set | findstr /B "TELEGRAM_FOLLOWER" >> "${invocationPath}"\r\n` +
+        hold +
+        `exit /b 0\r\n`,
+    );
+  } else {
+    const hold =
+      opts.mode === "hold" ? "while :; do sleep 1; done" : `sleep ${opts.exitMs / 1000}`;
+    await writeFile(
+      path,
+      `#!/bin/bash\n` +
+        `echo "ARGS:$*" >> "${invocationPath}"\n` +
+        `env | grep TELEGRAM_FOLLOWER >> "${invocationPath}" || true\n` +
+        hold +
+        `\nexit 0\n`,
+    );
+    await chmod(path, 0o755);
+  }
   return { path, dir };
 }
 
