@@ -164,6 +164,9 @@ test("Concrete delivery runtime deleteViewStale unpins and deletes by handle tar
   };
   const result = await deleteTelegramView(stale);
   assert.equal(result.ok, true);
+  // Pin semantics: only the FIRST delivered message is pinned (see the delivery
+  // pin contract), so a stale pinned handle expects exactly one unpin on the
+  // first id, and then every id is deleted best-effort.
   const unpins = events.filter((e) => e.type === "unpin");
   assert.equal(unpins.length, 1);
   assert.deepEqual(unpins[0], {
@@ -176,6 +179,24 @@ test("Concrete delivery runtime deleteViewStale unpins and deletes by handle tar
     deletes.map((e) => e.messageId),
     [21, 22],
   );
+});
+
+test("Concrete delivery runtime deleteViewStale tolerates an empty message id list", async () => {
+  const { runtime, events } = createConcreteRuntimeHarness({
+    async unpinMessage(deliveryTarget, messageId) {
+      events.push({ type: "unpin", deliveryTarget, messageId });
+    },
+  });
+  bindTelegramDeliveryRuntime(runtime);
+  const result = await deleteTelegramView({
+    target,
+    messageIds: [],
+    generation: "older-generation",
+    pinned: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(events.filter((e) => e.type === "unpin").length, 0);
+  assert.equal(events.filter((e) => e.type === "delete").length, 0);
 });
 
 test("A stale runtime disposer cannot clear its replacement", async () => {

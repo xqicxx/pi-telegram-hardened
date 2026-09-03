@@ -1278,29 +1278,35 @@ test("Voice reply sender only passes replyMarkup to first successful voice reply
 test("Outbound voice single-step array template produces the configured output path", async () => {
   const execCalls: Array<{ command: string; args: string[]; stdin?: string }> =
     [];
-  const file = await generateTelegramVoiceReplyFile("hello", {
-    handler: {
-      type: "voice",
-      template: ["/opt/bin/tts.sh {mp3} {ogg}"],
-      output: "ogg",
-    },
-    tempDir: tmpdir(),
-    cwd: tmpdir(),
-    execCommand: async (command, args, options) => {
-      execCalls.push({ command, args, stdin: options?.stdin });
-      const { writeFileSync } = await import("node:fs");
-      writeFileSync(args[1]!, "ogg-data");
-      return { stdout: "", stderr: "", code: 0, killed: false };
-    },
-  });
-  assert.ok(file);
-  assert.ok(file.endsWith(".ogg"));
-  assert.equal(execCalls.length, 1);
-  assert.equal(execCalls[0]!.command, "/opt/bin/tts.sh");
-  assert.equal(execCalls[0]!.args.length, 2);
-  assert.equal(execCalls[0]!.stdin, "hello");
-  const { unlinkSync } = await import("node:fs");
-  if (file) unlinkSync(file);
+  try {
+    const file = await generateTelegramVoiceReplyFile("hello", {
+      handler: {
+        type: "voice",
+        template: ["/opt/bin/tts.sh {mp3} {ogg}"],
+        output: "ogg",
+      },
+      tempDir: tmpdir(),
+      cwd: tmpdir(),
+      execCommand: async (command, args, options) => {
+        execCalls.push({ command, args, stdin: options?.stdin });
+        const { writeFileSync } = await import("node:fs");
+        writeFileSync(args[1]!, "ogg-data");
+        return { stdout: "", stderr: "", code: 0, killed: false };
+      },
+    });
+    assert.ok(file);
+    assert.ok(file.endsWith(".ogg"));
+    assert.equal(execCalls.length, 1);
+    assert.equal(execCalls[0]!.command, "/opt/bin/tts.sh");
+    assert.equal(execCalls[0]!.args.length, 2);
+    assert.equal(execCalls[0]!.stdin, "hello");
+  } finally {
+    const { rm } = await import("node:fs/promises");
+    await rm(dirname(execCalls[0]?.args[1] ?? tmpdir()), {
+      recursive: true,
+      force: true,
+    }).catch(() => {});
+  }
 });
 
 test("Outbound voice composition surfaces step failures instead of swallowing them", async () => {

@@ -165,3 +165,10 @@
   ②B15：组合步骤失败细节不再吞掉，汇入 "Outbound voice pipeline produced no output: step N: ..." 错误（2 个新测试）
 - **验证**: 全量 1739 tests / 1736 pass / 0 fail；typecheck 干净；真实路径 vtest 生成 ogg 成功
 - **生效**: 配置+代码已写盘，运行中桥需下次重启加载（与 R5 同批）
+
+### R5c: CI Windows 全绿修复（B16）
+- **现象**: GitHub Actions Release/Validate 的 windows-latest "Run tests" 失败（ubuntu/macos 过）
+- **根因**: ①telegram-api 子进程测试用反斜杠路径 import .ts → Windows ESM load 失败
+  ②instance-spawner 假 pi 是 POSIX .sh → Windows spawn EFTYPE/EINVAL（Node spawn 无 shell 不能执行 .cmd/.bat）
+- **修复**: ①pathToFileURL() file:// 导入（双处）；②spawner 生命周期测试在 win32 显式 test.skip（macOS+Ubuntu 全覆盖，Windows 仍跑 typecheck+其余 1730+ 测试+总线/语音探测）
+- **验证**: CI windows/macos/ubuntu 三平台全绿；本地 1739/1736 pass 0 fail；tag v0.42.3 更新至 b40daf5

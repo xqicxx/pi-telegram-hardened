@@ -5,8 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { TelegramAssistantSegmentEvent } from "./activity.ts";
@@ -510,10 +509,20 @@ async function generateTelegramVoiceReplyFileWithHandler(
       }
     }
     const outputPath = getVoiceReplyOutputPath(options.handler, values, stdout);
-    if (stepFailures.length > 0 && !existsSync(outputPath)) {
-      throw new Error(
-        `Outbound voice pipeline produced no output: ${stepFailures.join("; ")}`,
-      );
+    if (stepFailures.length > 0) {
+      // Non-root steps are allowed to fail by design (the `failure` field marks
+      // critical steps): a failed non-root step feeds empty stdout onward and
+      // the configured output placeholder decides success. So a step failure is
+      // not fatal on its own, but if the pipeline then produced no output at
+      // all, fail loudly with the step diagnostics instead of leaving the
+      // caller to trip over a missing file (or upload a stale artifact).
+      try {
+        await stat(outputPath);
+      } catch {
+        throw new Error(
+          `Outbound voice pipeline produced no output: ${stepFailures.join("; ")}`,
+        );
+      }
     }
     return outputPath;
   }

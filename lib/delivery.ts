@@ -737,7 +737,11 @@ export function createTelegramDeliveryRuntime(
       return runForTarget(authorized.value, async () => {
         if (!active) return inactive();
         try {
-          if (handle.pinned && deps.unpinMessage) {
+          if (
+            handle.pinned &&
+            deps.unpinMessage &&
+            handle.messageIds.length > 0
+          ) {
             try {
               await deps.unpinMessage(
                 authorized.value,
@@ -750,7 +754,12 @@ export function createTelegramDeliveryRuntime(
           }
           for (const messageId of handle.messageIds) {
             if (!active) return inactive();
-            await deps.deleteMessage(authorized.value, messageId);
+            try {
+              await deps.deleteMessage(authorized.value, messageId);
+            } catch {
+              // Best-effort cleanup: keep removing the remaining messages even
+              // if one is already gone or transport rejects it.
+            }
             if (!active) return inactive();
           }
           return { ok: true, value: undefined };
